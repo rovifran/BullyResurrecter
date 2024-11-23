@@ -1,0 +1,19 @@
+name: poc
+services:
+  processes-1:
+    container_name: processes-1
+    image: processes:latest
+    entrypoint: ["/processes"]
+    networks:
+      - poc
+
+  processes-2:
+    container_name: processes-2
+    image: processes:latest
+    entrypoint: ["/processes"]
+    networks:
+      - poc
+
+networks:
+  poc:
+    driver: bridge
