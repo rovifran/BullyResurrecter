@@ -5,14 +5,22 @@ services:
     image: processes:latest
     entrypoint: ["/processes"]
     networks:
-      - poc
+      poc:
+        aliases:
+          - processes-1
+    environment:
+      - CLI_ID=2
 
   processes-2:
     container_name: processes-2
     image: processes:latest
     entrypoint: ["/processes"]
     networks:
-      - poc
+      poc:
+        aliases:
+          - processes-2
+    environment:
+      - CLI_ID=1
 
 networks:
   poc:
