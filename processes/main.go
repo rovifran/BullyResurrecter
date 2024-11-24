@@ -42,15 +42,16 @@ func main() {
 	defer conn.Close()
 
 	if cliId == "1" {
-		sendMessage(conn, messagePing)
+		// sendMessage(conn, messagePing)
 	}
 
 	buffer := make([]byte, 1024)
+	listener.SetReadDeadline(time.Now().Add(5 * time.Second))
 	for {
 		n, addr, err := listener.ReadFromUDP(buffer)
-		if err != nil {
+		if err != nil{
 			fmt.Printf("Error reading from UDP: %v\n", err)
-			continue
+			return
 		}
 
 		received := string(buffer[:n])
