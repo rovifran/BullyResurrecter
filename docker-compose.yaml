@@ -1,4 +1,13 @@
 name: poc
+networks:
+  poc:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 10.5.0.0/16
+          gateway: 10.5.0.1
+
 services:
   processes-1:
     container_name: processes-1
@@ -6,11 +15,10 @@ services:
     entrypoint: ["/processes"]
     networks:
       poc:
-        aliases:
-          - processes-1
+        ipv4_address: 10.5.1.1
     environment:
-      - CLI_ID=2
-      - LISTEN_PORT=8000
+      - BULLY_NODES=2
+      - CLI_ID=1
 
   processes-2:
     container_name: processes-2
@@ -18,13 +26,18 @@ services:
     entrypoint: ["/processes"]
     networks:
       poc:
-        aliases:
-          - processes-2
+        ipv4_address: 10.5.1.2
     environment:
-      - CLI_ID=1
-      - LISTEN_PORT=8000
+      - BULLY_NODES=2
+      - CLI_ID=2
 
-networks:
-  poc:
-    driver: bridge
-    internal: true
+  # processes-3:
+  #   container_name: processes-3
+  #   image: processes:latest
+  #   entrypoint: ["/processes"]
+  #   networks:
+  #     poc:
+  #       ipv4_address: 10.5.1.3
+  #   environment:
+  #     - BULLY_NODES=3
+  #     - CLI_ID=3
