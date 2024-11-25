@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/rand/v2"
 	"net"
 	"os"
 	"time"
@@ -60,10 +61,12 @@ type Socket struct {
 // NewSocket creates a new socket and initializes the addresses
 // for its corresponding peer processes
 func NewSocket(processName string, peers []string, port int) (*Socket, error) {
-	localAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", processName, port))
+	fmt.Printf("Resolving local address on port %d\n", port)
+	localAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, fmt.Errorf("error resolving local address: %v", err)
 	}
+	fmt.Printf("Listening on %s\n", localAddr)
 	conn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
 		return nil, fmt.Errorf("error listening on UDP port: %v", err)
@@ -71,6 +74,7 @@ func NewSocket(processName string, peers []string, port int) (*Socket, error) {
 
 	peersInfo := make(map[string]*PeerInfo)
 	for _, peer := range peers {
+
 		peerAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", peer, port))
 		if err != nil {
 			return nil, fmt.Errorf("error resolving peer address: %v", err)
@@ -111,6 +115,9 @@ func (s *Socket) _send(msg Message, dest string, callback func(Message), retries
 		writtenBytes = n
 	}
 
+	if _, ok := s.pendingMessages[dest]; !ok {
+		s.pendingMessages[dest] = make(map[uint16]PendingMessage)
+	}
 	s.pendingMessages[dest][msg.SeqNum] = PendingMessage{
 		Msg:      msg,
 		Retries:  retries,
@@ -134,34 +141,36 @@ func (s *Socket) Send(data []byte, dest string, callback func(Message)) error {
 		Data:   data,
 	}
 
+	fmt.Printf("Sending message %v to %s with seqNum %d\n", msg, dest, seqNum)
+
 	return s._send(msg, dest, callback, 0, 1*time.Second) // TODO estos valores de timeout y retries estan hardcodeados, cambiarlos despues por los que vienen x config
 }
 
 // Receive receives a message from a source. Handles the corresponding acks and timeouts.
 // Returns an error if there were any critical ones or does not return anything if the message was received correctly,
 // in which case the message is copied into the buffer
-func (s *Socket) Receive(buffer []byte) error {
+func (s *Socket) Receive(buffer []byte) (int, string, error) {
 	for {
 		innerBuffer := make([]byte, len(buffer))
 		pendingMessagesWithSmallestTimeout := s.determineSmallestTimeout()
 		if len(pendingMessagesWithSmallestTimeout) == 0 {
 			if err := s.conn.SetReadDeadline(time.Time{}); err != nil {
-				return fmt.Errorf("error setting read deadline: %v", err)
+				return 0, "", fmt.Errorf("error setting read deadline: %v", err)
 			}
 		} else {
 			if err := s.conn.SetReadDeadline(time.Now().Add(pendingMessagesWithSmallestTimeout[0].Timeout)); err != nil {
-				return fmt.Errorf("error setting read deadline: %v", err)
+				return 0, "", fmt.Errorf("error setting read deadline: %v", err)
 			}
 		}
 
 		n, addr, err := s.conn.ReadFromUDP(innerBuffer)
 
 		if err == net.ErrClosed {
-			return fmt.Errorf("socket closed")
+			return 0, "", fmt.Errorf("socket closed")
 		}
 
 		if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
-			return fmt.Errorf("error reading from UDP: %v", err)
+			return 0, "", fmt.Errorf("error reading from UDP: %v", err)
 		}
 
 		s.recalculateTimeouts()
@@ -173,17 +182,28 @@ func (s *Socket) Receive(buffer []byte) error {
 
 		var msg Message
 		if err := gobDecode(innerBuffer[:n], &msg); err != nil {
-			return fmt.Errorf("error decoding message: %v", err)
+			return 0, "", fmt.Errorf("error decoding message: %v", err)
 		}
 
 		if msg.IsAck {
+			if rand.Float32() < 0.3 {
+				fmt.Printf("Dropping ACK packet from %v\n", addr)
+				continue
+			}
 			s.handleAck(msg)
 		} else {
 			if err := s.sendAck(msg, addr); err != nil {
-				return fmt.Errorf("error sending ack: %v", err)
+				return 0, "", fmt.Errorf("error sending ack: %v", err)
 			}
 			copy(buffer, msg.Data)
-			return nil
+			var dest string
+			for name, peer := range s.peers {
+				if peer.Addr.String() == addr.String() {
+					dest = name
+					break
+				}
+			}
+			return len(msg.Data), dest, nil
 		}
 	}
 }
@@ -232,6 +252,7 @@ func (s *Socket) recalculateTimeouts() {
 }
 
 func (s *Socket) handleAck(msg Message) {
+	fmt.Printf("Received ACK for message %v with seqNum %d\n", msg, msg.SeqNum)
 	_, ok := s.pendingMessages[msg.Dest][msg.SeqNum]
 	if !ok {
 		return
@@ -241,6 +262,7 @@ func (s *Socket) handleAck(msg Message) {
 
 // sendAck sends an ack to a source
 func (s *Socket) sendAck(msg Message, addr *net.UDPAddr) error {
+	fmt.Printf("Sending ACK for message %v with seqNum %d\n", msg, msg.SeqNum)
 	ack := Message{
 		IsAck:  true,
 		SeqNum: msg.SeqNum,
@@ -266,6 +288,7 @@ func (s *Socket) sendTimeoutMessages() {
 			} else if pendingMessage.Timeout <= 0 {
 				pendingMessage.Retries = pendingMessage.Retries + 1
 				pendingMessage.Timeout = pendingMessage.Timeout * 2
+				fmt.Printf("Packet lost. Resending message to %s with seqNum %d\n", pendingMessage.Msg.Dest, pendingMessage.Msg.SeqNum)
 				s._send(pendingMessage.Msg, pendingMessage.Msg.Dest, pendingMessage.Callback, pendingMessage.Retries, pendingMessage.Timeout)
 			}
 		}

@@ -1,16 +1,16 @@
 package main
 
 import (
+	udpcomms "bullyresurrecter/udp-comms/socket"
 	"fmt"
-	"net"
 	"os"
+	"strconv"
 	"time"
 )
 
 const (
-	listenPort  = ":34567" // UDP listening port
-	messagePing = "ping"   // Initial message
-	messagePong = "pong"   // Response to the message
+	messagePing = "ping" // Initial message
+	messagePong = "pong" // Response to the message
 )
 
 func main() {
@@ -19,43 +19,38 @@ func main() {
 		fmt.Println("CLI_ID not specified")
 		os.Exit(1)
 	}
-
-	listenerAddr, err := net.ResolveUDPAddr("udp", listenPort)
+	listenPort, err := strconv.Atoi(os.Getenv("LISTEN_PORT"))
 	if err != nil {
-		fmt.Printf("Error resolving UDP address: %v\n", err)
+		fmt.Printf("Error getting LISTEN_PORT: %v\n", err)
 		os.Exit(1)
 	}
 
-	listener, err := net.ListenUDP("udp", listenerAddr)
-	if err != nil {
-		fmt.Printf("Error listening on UDP: %v\n", err)
-		os.Exit(1)
+	peers := []string{}
+	if cliId == "1" {
+		peers = []string{"processes-1"}
+	} else if cliId == "2" {
+		peers = []string{"processes-2"}
 	}
-	defer listener.Close()
 
-	remoteAddr := fmt.Sprintf("processes-%s:34567", cliId)
-	conn, err := net.Dial("udp", remoteAddr)
+	socket, err := udpcomms.NewSocket(fmt.Sprintf("processes-%s", cliId), peers, listenPort)
 	if err != nil {
-		fmt.Printf("Error connecting to the remote process: %v\n", err)
+		fmt.Printf("Error creating socket: %v\n", err)
 		os.Exit(1)
 	}
-	defer conn.Close()
 
 	if cliId == "1" {
-		// sendMessage(conn, messagePing)
+		sendMessage(socket, messagePing, peers[0])
 	}
 
 	buffer := make([]byte, 1024)
-	listener.SetReadDeadline(time.Now().Add(5 * time.Second))
 	for {
-		n, addr, err := listener.ReadFromUDP(buffer)
-		if err != nil{
+		n, name, err := socket.Receive(buffer)
+		if err != nil {
 			fmt.Printf("Error reading from UDP: %v\n", err)
 			return
 		}
 
 		received := string(buffer[:n])
-		fmt.Printf("Received: %s from %s\n", received, addr)
 
 		var response string
 		if received == messagePing {
@@ -66,16 +61,18 @@ func main() {
 			continue
 		}
 
-		sendMessage(conn, response)
+		sendMessage(socket, response, name)
 	}
 }
 
-func sendMessage(conn net.Conn, message string) {
-	_, err := conn.Write([]byte(message))
+func sendMessage(socket *udpcomms.Socket, message string, peer string) {
+	err := socket.Send([]byte(message), peer, func(m udpcomms.Message) {
+		fmt.Printf("Se cayo el proceso al cual le estoy hablando")
+	})
 	if err != nil {
 		fmt.Printf("Error sending message: %v\n", err)
 	} else {
 		fmt.Printf("Sent: %s\n", message)
 	}
-	time.Sleep(1 * time.Second)
+	time.Sleep(2 * time.Second)
 }

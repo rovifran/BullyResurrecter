@@ -10,6 +10,7 @@ services:
           - processes-1
     environment:
       - CLI_ID=2
+      - LISTEN_PORT=8000
 
   processes-2:
     container_name: processes-2
@@ -21,7 +22,9 @@ services:
           - processes-2
     environment:
       - CLI_ID=1
+      - LISTEN_PORT=8000
 
 networks:
   poc:
     driver: bridge
+    internal: true

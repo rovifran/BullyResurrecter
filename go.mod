@@ -1,4 +1,4 @@
-module github.com/rovifran/BullyResurrecter
+module bullyresurrecter
 
 go 1.23.1
 
