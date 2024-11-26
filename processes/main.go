@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -28,19 +29,22 @@ func main() {
 	}
 
 	node := NewNode(cliId)
-	go node.Listen()
 
 	node.CreateTopology(bullyNodes)
 
 	time.Sleep(1 * time.Second)
 
-	for i := 0; i < 1000; i++ {
-		for _, peer := range node.peers {
-			peer.SendMsg(Message{Type: MessageTypePing, Data: "Hello, world!"})
-		}
-	}
+	go func() {
 
-	time.Sleep(1 * time.Hour)
+		for i := 0; i < 10000; i++ {
+			for _, peer := range node.peers {
+				peer.SendMsg(Message{Type: MessageTypePing, Data: "Hello, world!"})
+			}
+		}
+	}()
+	node.Listen()
+
+	select {}
 }
 
 type MessageType int32
@@ -52,7 +56,7 @@ const (
 
 type Message struct {
 	Type   MessageType
-	SeqNum uint16
+	SeqNum uint
 	Data   string
 }
 
@@ -114,21 +118,29 @@ func (n *Node) Listen() {
 				return
 			}
 
+			log.Printf("Received message from %s, type: %d, seqNum: %d, data: %s", who.String(), msg.Type, msg.SeqNum, msg.Data)
+
 			for _, peer := range n.peers {
+
 				if peer.addr.String() == who.String() {
 					peer.in <- msg
+					return
 				}
 			}
+			log.Printf("Unknown peer: %s", who.String())
 		}()
 	}
+
 }
 
 type Peer struct {
-	addr       *net.UDPAddr
-	conn       *net.UDPConn
-	out        chan Message
-	in         chan Message
-	pendingOut *Message
+	addr            *net.UDPAddr
+	conn            *net.UDPConn
+	out             chan Message
+	in              chan Message
+	pendingOut      *Message
+	pendingOutMutex sync.Mutex
+	started         bool
 }
 
 func NewPeer(ip *string, conn *net.UDPConn) *Peer {
@@ -138,7 +150,7 @@ func NewPeer(ip *string, conn *net.UDPConn) *Peer {
 		return nil
 	}
 
-	peer := Peer{addr: ipAddr, conn: conn, out: make(chan Message, 100), in: make(chan Message, 100)}
+	peer := Peer{addr: ipAddr, conn: conn, out: make(chan Message, 10), in: make(chan Message, 10), pendingOutMutex: sync.Mutex{}}
 	go peer.InLoop()
 	return &peer
 }
@@ -159,6 +171,8 @@ func (p *Peer) InLoop() {
 				p._send(msg.SeqNum + 1)
 			} else if p.pendingOut != nil {
 				log.Printf("Ack for invalid pending out, waiting for %d and got %d", p.pendingOut.SeqNum, msg.SeqNum)
+			} else {
+				log.Printf("No pending out and got ack %d", msg.SeqNum)
 			}
 		default:
 			log.Printf("Unknown message type: %d", msg.Type)
@@ -170,21 +184,30 @@ func (p *Peer) InLoop() {
 }
 
 func (p *Peer) SendMsg(msg Message) error {
-	empty := len(p.out) == 0
 	p.out <- msg
-	if empty {
-		p._send(0)
+	if !p.started {
+		p.started = true
+		p._send(1)
 	}
 	return nil
 }
 
-func (p *Peer) _send(seqNum uint16) error {
+func (p *Peer) _send(seqNum uint) error {
+	p.pendingOutMutex.Lock()
+	defer p.pendingOutMutex.Unlock()
+
 	if p.pendingOut != nil {
 		return nil
 	}
+
+	if len(p.out) == 0 {
+		return nil
+	}
+
 	log.Printf(">>> %s: %d", p.addr.String(), seqNum)
 
 	msg := <-p.out
+
 	msg.SeqNum = seqNum
 	p.pendingOut = &msg
 
@@ -201,7 +224,7 @@ func (p *Peer) _send(seqNum uint16) error {
 	return err
 }
 
-func (p *Peer) Ack(seqNum uint16) {
+func (p *Peer) Ack(seqNum uint) {
 	log.Printf(">>> ACK %s: %d", p.addr.String(), seqNum)
 	var buf bytes.Buffer
 	enc := gob.NewEncoder(&buf)
