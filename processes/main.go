@@ -35,7 +35,8 @@ func main() {
 
 	node := NewNode(cliId)
 	node.CreateTopology(bullyNodes)
-	go node.Listen()
+
+	go node.Listen() // solo responde por esta conn TCP, no arranca la topologia nunca (no PING, no ELECTION, etc)
 
 	time.Sleep(1 * time.Second)
 
@@ -43,10 +44,10 @@ func main() {
 	for i := 0; i < 100; i++ {
 
 		for _, peer := range node.peers {
-			peer.Send(Message{PeerId: cliId, Type: MessageTypePing, Seq: i})
+			peer.Send(Message{PeerId: cliId, Type: MessageTypePing, Seq: i}) // mando por mi llamado el PING
 
 			response := new(Message)
-			err := peer.decoder.Decode(response)
+			err := peer.decoder.Decode(response) // se que el proximo mensaje por este channel solo va a ser PONG porque no me va a mandar PING por aca
 			if err != nil {
 				fmt.Printf("Error decoding response: %v\n", err)
 				continue
@@ -142,6 +143,11 @@ func (n *Node) RespondToPeer(conn *net.TCPConn) {
 		}
 	}
 }
+
+// Representa a un PEER al que YO llamo y consulto, cuando el me consulta a mi usa su pripio call, no es full duplex
+//
+// A -> B y B -> A
+// en vez de A <--> B
 
 type Peer struct {
 	ip      *net.IP
