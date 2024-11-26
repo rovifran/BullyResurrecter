@@ -1,10 +1,10 @@
 package main
 
 import (
-	"bytes"
 	"encoding/gob"
 	"fmt"
 	"log"
+	"math/rand/v2"
 	"net"
 	"os"
 	"strconv"
@@ -12,10 +12,15 @@ import (
 	"time"
 )
 
+const (
+	messagePing = "ping\n" // Initial message
+	messagePong = "pong\n" // Response to the message
+)
+
 func main() {
 	cliId, err := strconv.Atoi(os.Getenv("CLI_ID"))
 	if err != nil {
-		log.Printf("Error getting CLI_ID: %v\n", err)
+		fmt.Printf("Error getting CLI_ID: %v\n", err)
 		os.Exit(1)
 	}
 	if cliId == 0 {
@@ -24,65 +29,61 @@ func main() {
 	}
 	bullyNodes, err := strconv.Atoi(os.Getenv("BULLY_NODES"))
 	if err != nil {
-		log.Printf("Error getting BULLY_NODES: %v\n", err)
+		fmt.Printf("Error getting BULLY_NODES: %v\n", err)
 		os.Exit(1)
 	}
 
 	node := NewNode(cliId)
-
 	node.CreateTopology(bullyNodes)
+	go node.Listen()
 
 	time.Sleep(1 * time.Second)
 
-	go func() {
+	start := time.Now()
+	for i := 0; i < 100; i++ {
 
-		for i := 0; i < 10000; i++ {
-			for _, peer := range node.peers {
-				peer.SendMsg(Message{Type: MessageTypePing, Data: "Hello, world!"})
+		for _, peer := range node.peers {
+			peer.Send(Message{PeerId: cliId, Type: MessageTypePing, Seq: i})
+
+			response := new(Message)
+			err := peer.decoder.Decode(response)
+			if err != nil {
+				fmt.Printf("Error decoding response: %v\n", err)
+				continue
+			}
+
+			fmt.Printf("Received response from %s: %+v\n", peer.ip.String(), response)
+
+			if rand.Int32N(100) < 3 && peer.conn != nil {
+				log.Printf("Randomly closing peer %s\n", peer.ip.String())
+				peer.Close()
 			}
 		}
-	}()
-	node.Listen()
+	}
+
+	log.Printf("Total time: %dms\n", time.Since(start).Milliseconds())
 
 	select {}
-}
-
-type MessageType int32
-
-const (
-	MessageTypePing MessageType = iota
-	MessageTypeAck
-)
-
-type Message struct {
-	Type   MessageType
-	SeqNum uint
-	Data   string
 }
 
 type Node struct {
 	id         int
 	peers      []*Peer
-	serverConn *net.UDPConn
-	serverAddr *net.UDPAddr
+	serverConn *net.TCPListener
+	serverAddr *net.TCPAddr
+	peerLock   sync.Mutex
 }
 
 func NewNode(id int) *Node {
 	peers := []*Peer{}
 
-	serverAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("10.5.1.%d:8000", id))
+	serverAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("10.5.1.%d:8000", id))
 	if err != nil {
-		log.Printf("Error resolving server address: %v\n", err)
+		fmt.Printf("Error resolving server address: %v\n", err)
 		os.Exit(1)
 	}
 
-	serverConn, err := net.ListenUDP("udp", serverAddr)
-	if err != nil {
-		log.Printf("Error listening on server address: %v\n", err)
-		os.Exit(1)
-	}
-
-	return &Node{id: id, peers: peers, serverAddr: serverAddr, serverConn: serverConn}
+	return &Node{id: id, peers: peers, serverAddr: serverAddr, peerLock: sync.Mutex{}}
 }
 
 func (n *Node) CreateTopology(bullyNodes int) {
@@ -91,7 +92,7 @@ func (n *Node) CreateTopology(bullyNodes int) {
 			continue
 		}
 		peerIp := fmt.Sprintf("10.5.1.%d", i)
-		peer := NewPeer(&peerIp, n.serverConn)
+		peer := NewPeer(&peerIp)
 		if peer != nil {
 			n.peers = append(n.peers, peer)
 		}
@@ -99,142 +100,111 @@ func (n *Node) CreateTopology(bullyNodes int) {
 }
 
 func (n *Node) Listen() {
+	serverConn, err := net.ListenTCP("tcp", n.serverAddr)
+	if err != nil {
+		fmt.Printf("Error listening on server address: %v\n", err)
+		os.Exit(1)
+	}
+	n.serverConn = serverConn
 
 	for {
-		func() {
-			var msg Message
 
-			innerBuffer := make([]byte, 1024)
+		conn, err := serverConn.AcceptTCP()
+		if err != nil {
+			fmt.Printf("Error accepting connection: %v\n", err)
+			continue
+		}
 
-			_, who, err := n.serverConn.ReadFromUDP(innerBuffer)
-			if err != nil {
-				log.Printf("Error reading from server connection: %v\n", err)
-				os.Exit(1)
-			}
-
-			decoder := gob.NewDecoder(bytes.NewReader(innerBuffer))
-			if err := decoder.Decode(&msg); err != nil {
-				log.Printf("Error decoding message: %v\n", err)
-				return
-			}
-
-			log.Printf("Received message from %s, type: %d, seqNum: %d, data: %s", who.String(), msg.Type, msg.SeqNum, msg.Data)
-
-			for _, peer := range n.peers {
-
-				if peer.addr.String() == who.String() {
-					peer.in <- msg
-					return
-				}
-			}
-			log.Printf("Unknown peer: %s", who.String())
-		}()
+		go n.RespondToPeer(conn)
 	}
+}
 
+func (n *Node) RespondToPeer(conn *net.TCPConn) {
+	log.Printf("Peer %s connected\n", conn.RemoteAddr().String())
+
+	read := gob.NewDecoder(conn)
+	encoder := gob.NewEncoder(conn)
+
+	for {
+		message := new(Message)
+		err := read.Decode(message)
+
+		if err != nil {
+			fmt.Printf("Error decoding message: %v\n", err)
+			conn.Close()
+			return
+		}
+
+		switch message.Type {
+		case MessageTypePing:
+			encoder.Encode(Message{PeerId: n.id, Type: MessageTypePong, Seq: message.Seq})
+		case MessageTypePong:
+		}
+	}
 }
 
 type Peer struct {
-	addr            *net.UDPAddr
-	conn            *net.UDPConn
-	out             chan Message
-	in              chan Message
-	pendingOut      *Message
-	pendingOutMutex sync.Mutex
-	started         bool
+	ip      *net.IP
+	conn    *net.TCPConn
+	encoder *gob.Encoder
+	decoder *gob.Decoder
 }
 
-func NewPeer(ip *string, conn *net.UDPConn) *Peer {
-	ipAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:8000", *ip))
+func NewPeer(ip *string) *Peer {
+	ipAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:8000", *ip))
 	if err != nil {
-		log.Printf("Error resolving peer IP address: %v\n", err)
+		fmt.Printf("Error resolving peer IP address: %v\n", err)
 		return nil
 	}
 
-	peer := Peer{addr: ipAddr, conn: conn, out: make(chan Message, 10), in: make(chan Message, 10), pendingOutMutex: sync.Mutex{}}
-	go peer.InLoop()
-	return &peer
+	return &Peer{ip: &ipAddr.IP, conn: nil, encoder: nil, decoder: nil}
 }
 
-func (p *Peer) InLoop() {
-	for msg := range p.in {
-		if msg.Type == MessageTypeAck {
-			log.Printf("<<< ACK %s: %d", p.addr.String(), msg.SeqNum)
-		} else {
-			log.Printf("<<< %s: %d", p.addr.String(), msg.SeqNum)
-		}
-		switch msg.Type {
-		case MessageTypePing:
-			p.Ack(msg.SeqNum)
-		case MessageTypeAck:
-			if p.pendingOut != nil && p.pendingOut.SeqNum == msg.SeqNum {
-				p.pendingOut = nil
-				p._send(msg.SeqNum + 1)
-			} else if p.pendingOut != nil {
-				log.Printf("Ack for invalid pending out, waiting for %d and got %d", p.pendingOut.SeqNum, msg.SeqNum)
-			} else {
-				log.Printf("No pending out and got ack %d", msg.SeqNum)
-			}
-		default:
-			log.Printf("Unknown message type: %d", msg.Type)
-		}
-
+func (p *Peer) call() error {
+	log.Printf("Calling Peer %s...\n", p.ip.String())
+	conn, err := net.DialTCP("tcp", nil, &net.TCPAddr{IP: *p.ip, Port: 8000})
+	if err != nil {
+		return err
 	}
-
-	log.Printf("<<< IN LOOP ENDED")
-}
-
-func (p *Peer) SendMsg(msg Message) error {
-	p.out <- msg
-	if !p.started {
-		p.started = true
-		p._send(1)
-	}
+	p.conn = conn
+	p.encoder = gob.NewEncoder(conn)
+	p.decoder = gob.NewDecoder(conn)
 	return nil
 }
 
-func (p *Peer) _send(seqNum uint) error {
-	p.pendingOutMutex.Lock()
-	defer p.pendingOutMutex.Unlock()
+func (p *Peer) Close() {
+	p.conn.Close()
+	p.conn = nil
+}
 
-	if p.pendingOut != nil {
-		return nil
+func (p *Peer) Send(message Message) error {
+	if p.conn == nil {
+		err := p.call()
+		if err != nil {
+			log.Printf("Error calling peer %s: %v\n", p.ip.String(), err)
+			log.Printf("Restarting peer %s...\n", p.ip.String())
+			return err
+		}
 	}
 
-	if len(p.out) == 0 {
-		return nil
-	}
-
-	log.Printf(">>> %s: %d", p.addr.String(), seqNum)
-
-	msg := <-p.out
-
-	msg.SeqNum = seqNum
-	p.pendingOut = &msg
-
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(msg); err != nil {
+	err := p.encoder.Encode(message)
+	if err != nil {
+		log.Printf("Error sending message to %s: %v\n", p.ip.String(), err)
 		return err
 	}
 
-	_, err := p.conn.WriteToUDP(buf.Bytes(), p.addr)
-	if err != nil {
-		log.Printf("Error sending message: %v\n", err)
-	}
-	return err
+	return nil
 }
 
-func (p *Peer) Ack(seqNum uint) {
-	log.Printf(">>> ACK %s: %d", p.addr.String(), seqNum)
-	var buf bytes.Buffer
-	enc := gob.NewEncoder(&buf)
-	if err := enc.Encode(Message{Type: MessageTypeAck, SeqNum: seqNum}); err != nil {
-		log.Printf("Error encoding ack: %v\n", err)
-		return
-	}
+type MessageType int
 
-	_, err := p.conn.WriteToUDP(buf.Bytes(), p.addr)
-	if err != nil {
-		log.Printf("Error sending ack: %v\n", err)
-	}
+const (
+	MessageTypePing MessageType = iota
+	MessageTypePong
+)
+
+type Message struct {
+	PeerId int
+	Type   MessageType
+	Seq    int
 }
