@@ -27,44 +27,51 @@ func main() {
 		fmt.Println("CLI_ID not specified")
 		os.Exit(1)
 	}
-	bullyNodes, err := strconv.Atoi(os.Getenv("BULLY_NODES"))
-	if err != nil {
-		fmt.Printf("Error getting BULLY_NODES: %v\n", err)
-		os.Exit(1)
+	// bullyNodes, err := strconv.Atoi(os.Getenv("BULLY_NODES"))
+	// if err != nil {
+	// 	fmt.Printf("Error getting BULLY_NODES: %v\n", err)
+	// 	os.Exit(1)
+	// }
+
+	for {
+		time.Sleep(2 * time.Second)
+		fmt.Printf("Hello, i am process: %d\n", cliId)
 	}
 
-	node := NewNode(cliId)
-	node.CreateTopology(bullyNodes)
+	// node := NewNode(cliId)
 
-	go node.Listen() // solo responde por esta conn TCP, no arranca la topologia nunca (no PING, no ELECTION, etc)
+	// node.CreateTopology(bullyNodes)
+	// node.Run()
 
-	time.Sleep(1 * time.Second)
+	// go node.Listen() // solo responde por esta conn TCP, no arranca la topologia nunca (no PING, no ELECTION, etc)
 
-	start := time.Now()
-	for i := 0; i < 100; i++ {
+	// time.Sleep(1 * time.Second)
 
-		for _, peer := range node.peers {
-			peer.Send(Message{PeerId: cliId, Type: MessageTypePing, Seq: i}) // mando por mi llamado el PING
+	// start := time.Now()
+	// for i := 0; i < 100; i++ {
 
-			response := new(Message)
-			err := peer.decoder.Decode(response) // se que el proximo mensaje por este channel solo va a ser PONG porque no me va a mandar PING por aca
-			if err != nil {
-				fmt.Printf("Error decoding response: %v\n", err)
-				continue
-			}
+	// 	for _, peer := range node.peers {
+	// 		peer.Send(Message{PeerId: cliId, Type: MessageTypePing, Seq: i}) // mando por mi llamado el PING
 
-			fmt.Printf("Received response from %s: %+v\n", peer.ip.String(), response)
+	// 		response := new(Message)
+	// 		err := peer.decoder.Decode(response) // se que el proximo mensaje por este channel solo va a ser PONG porque no me va a mandar PING por aca
+	// 		if err != nil {
+	// 			fmt.Printf("Error decoding response: %v\n", err)
+	// 			continue
+	// 		}
 
-			if rand.Int32N(100) < 3 && peer.conn != nil {
-				log.Printf("Randomly closing peer %s\n", peer.ip.String())
-				peer.Close()
-			}
-		}
-	}
+	// 		fmt.Printf("Received response from %s: %+v\n", peer.ip.String(), response)
 
-	log.Printf("Total time: %dms\n", time.Since(start).Milliseconds())
+	// 		if rand.Int32N(100) < 3 && peer.conn != nil {
+	// 			log.Printf("Randomly closing peer %s\n", peer.ip.String())
+	// 			peer.Close()
+	// 		}
+	// 	}
+	// }
 
-	select {}
+	// log.Printf("Total time: %dms\n", time.Since(start).Milliseconds())
+
+	// select {}
 }
 
 type Node struct {
@@ -85,6 +92,39 @@ func NewNode(id int) *Node {
 	}
 
 	return &Node{id: id, peers: peers, serverAddr: serverAddr, peerLock: sync.Mutex{}}
+}
+
+func (n *Node) Run() {
+	go n.Listen() // solo responde por esta conn TCP, no arranca la topologia nunca (no PING, no ELECTION, etc)
+
+	time.Sleep(1 * time.Second)
+
+	start := time.Now()
+	for i := 0; i < 100; i++ {
+
+		for _, peer := range n.peers {
+			peer.Send(Message{PeerId: n.id, Type: MessageTypePing, Seq: i}) // mando por mi llamado el PING
+
+			response := new(Message)
+			err := peer.decoder.Decode(response) // se que el proximo mensaje por este channel solo va a ser PONG porque no me va a mandar PING por aca
+			if err != nil {
+				fmt.Printf("Error decoding response: %v\n", err)
+				continue
+			}
+
+			fmt.Printf("Received response from %s: %+v\n", peer.ip.String(), response)
+
+			if rand.Int32N(100) < 3 && peer.conn != nil {
+				log.Printf("Randomly closing peer %s\n", peer.ip.String())
+				peer.Close()
+			}
+			time.Sleep(10 * time.Second)
+		}
+	}
+
+	log.Printf("Total time: %dms\n", time.Since(start).Milliseconds())
+
+	select {}
 }
 
 func (n *Node) CreateTopology(bullyNodes int) {
@@ -122,6 +162,12 @@ func (n *Node) Listen() {
 
 func (n *Node) RespondToPeer(conn *net.TCPConn) {
 	log.Printf("Peer %s connected\n", conn.RemoteAddr().String())
+
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		fmt.Printf("Error setting read deadline: %v\n", err)
+		conn.Close()
+		return
+	}
 
 	read := gob.NewDecoder(conn)
 	encoder := gob.NewEncoder(conn)
