@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,7 @@ const (
 const (
 	ElectionTimeout   = 5 * time.Second
 	OkResponseTimeout = 2 * time.Second
+	PongTimeout       = 3 * time.Second
 )
 
 type Node struct {
@@ -34,6 +36,7 @@ type Node struct {
 	state         NodeState
 	currentLeader int
 	stopChan      chan struct{}
+	coordChan     chan *Message
 }
 
 const INACTIVE_LEADER = -1
@@ -41,6 +44,7 @@ const INACTIVE_LEADER = -1
 func NewNode(id int) *Node {
 	peers := []*Peer{}
 	stopChan := make(chan struct{})
+	coordChan := make(chan *Message)
 
 	serverAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("10.5.1.%d:8000", id))
 	if err != nil {
@@ -49,13 +53,14 @@ func NewNode(id int) *Node {
 	}
 
 	return &Node{
-		id:           id,
-		peers:        peers,
-		serverAddr:   serverAddr,
-		peerLock:     sync.Mutex{},
-		state:        NodeStateFollower,
+		id:            id,
+		peers:         peers,
+		serverAddr:    serverAddr,
+		peerLock:      sync.Mutex{},
+		state:         NodeStateFollower,
 		currentLeader: INACTIVE_LEADER,
 		stopChan:      stopChan,
+		coordChan:     coordChan,
 	}
 }
 
@@ -69,13 +74,17 @@ func (n *Node) Close() {
 
 func (n *Node) Run() {
 	fmt.Printf("Running node %d\n", n.id)
-	go n.Listen() // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
+	go n.Listen()        // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
 	go n.StartElection() // siempre queremos arrancar una eleccion cuando se levanta el nodo
 
 	<-n.stopChan
 }
 
 func (n *Node) StartElection() {
+	if n.GetState() == NodeStateCandidate || n.GetState() == NodeStateWaitingCoordinator {
+		return // si ya soy candidato, significa que alguien ya me envió un mensaje de eleccion y estoy esperando a que termine
+	}
+
 	log.Printf("Node %d starting election\n", n.id)
 	n.ChangeState(NodeStateCandidate)
 
@@ -119,35 +128,36 @@ func (n *Node) StartElection() {
 
 	// If no higher-numbered peers, become leader immediately
 	if len(waitingResponses) == 0 {
-		n.BecomeLeader()
+		go n.BecomeLeader()
 		return
 	}
 
-	// Wait for responses or timeout
+	// Wait for responses or timeout and act accordingly
 	for len(waitingResponses) > 0 {
 		select {
 		case peerId := <-responseChan:
 			delete(waitingResponses, peerId)
 			log.Printf("Received OK from peer %d", peerId)
-			n.ChangeState(NodeStateFollower)
+			n.ChangeState(NodeStateWaitingCoordinator)
 
 		case <-timeoutChan:
-			// If we timeout waiting for responses, we become the leader
-			log.Printf("Election timeout reached, becoming leader")
+			// If we timeout waiting for responses, we become the leader if we are a candidate
+			// or we wait for coordinator if we are waiting for one
+			log.Printf("Election timeout reached for node %d", n.id)
 			if n.GetState() == NodeStateCandidate {
-				n.BecomeLeader()
+				go n.BecomeLeader()
+			} else {
+				log.Printf("Node %d is not a candidate, waiting for coordinator", n.id)
+				go n.waitForCoordinator()
+				return
 			}
-			return
 		}
 	}
 
-	// If we got here, it means we received all OK responses
-	// Wait for coordinator message from someone else
-	log.Printf("Received all OK responses, waiting for coordinator message")
-	n.WaitForCoordinator()
+	go n.waitForCoordinator()
 }
 
-func (n *Node) WaitForCoordinator() {
+func (n *Node) waitForCoordinator() {
 	// Wait for coordinator message with timeout
 	coordTimeout := time.After(ElectionTimeout + OkResponseTimeout)
 
@@ -156,11 +166,65 @@ func (n *Node) WaitForCoordinator() {
 		case <-coordTimeout:
 			// If we timeout waiting for coordinator, start new election
 			log.Printf("Timeout waiting for coordinator, starting new election")
+			n.ChangeState(NodeStateFollower)
 			n.StartElection()
 			return
+		case message := <-n.coordChan:
+			log.Printf("Received coordinator message from %d\n", message.PeerId)
+			n.ChangeState(NodeStateFollower)
+			go n.startFollowerLoop(message.PeerId)
+			return
+		}
+	}
+}
 
-			// You might want to add a channel here to receive coordinator messages
-			// from the message handling routine
+func (n *Node) startFollowerLoop(leaderId int) {
+	log.Printf("Node %d starting follower loop\n", n.id)
+
+	var leaderPeer *Peer
+	for _, peer := range n.peers {
+		if peer.id == leaderId {
+			leaderPeer = peer
+			break
+		}
+	}
+
+	if leaderPeer == nil {
+		log.Printf("Leader peer not found, stopping follower loop")
+		return
+	}
+	leaderPeer.conn.SetReadDeadline(time.Now().Add(PongTimeout))
+
+	for {
+		select {
+		case <-n.stopChan:
+			return
+		case <-time.After(1 * time.Second):
+			log.Printf("Node %d sending ping to leader %d\n", n.id, leaderId)
+			if err := leaderPeer.Send(Message{PeerId: n.id, Type: MessageTypePing}); err != nil {
+				log.Printf("Error sending ping to leader %d: %v", leaderId, err)
+			}
+			if err := leaderPeer.conn.SetReadDeadline(time.Now().Add(PongTimeout)); err != nil {
+				log.Printf("Error setting read deadline for leader %d: %v", leaderId, err)
+
+			}
+			response := new(Message)
+			err := leaderPeer.decoder.Decode(response)
+			if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
+				log.Printf("Error decoding response from leader %d: %v", leaderId, err)
+				continue
+			}
+
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				log.Printf("Leader %d not responding, starting new election", leaderId)
+				n.ChangeState(NodeStateFollower)
+				go n.StartElection()
+				return
+			}
+
+			if response.Type == MessageTypePong {
+				log.Printf("Node %d received pong from leader %d\n", n.id, leaderId)
+			}
 		}
 	}
 }
@@ -285,6 +349,17 @@ func (n *Node) handleMessage(message *Message, encoder *gob.Encoder) {
 	case MessageTypeElection:
 		n.RespondToElection(message, encoder)
 		go n.StartElection()
+	case MessageTypeCoordinator:
+		n.RespondToCoordinator(message, encoder)
+		n.coordChan <- message
+	}
+}
+
+func (n *Node) RespondToCoordinator(message *Message, encoder *gob.Encoder) {
+	log.Printf("Received coordinator from %d\n", message.PeerId)
+	msg := Message{PeerId: n.id, Type: MessageTypeCoordinator, Seq: message.Seq}
+	if err := encoder.Encode(msg); err != nil {
+		fmt.Printf("Error sending coordinator message: %v\n", err)
 	}
 }
 
