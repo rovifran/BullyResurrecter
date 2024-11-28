@@ -10,20 +10,21 @@ import (
 )
 
 type Peer struct {
+	id      int
 	ip      *net.IP
 	conn    *net.TCPConn
 	encoder *gob.Encoder
 	decoder *gob.Decoder
 }
 
-func NewPeer(ip *string) *Peer {
+func NewPeer(id int, ip *string) *Peer {
 	ipAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:8000", *ip))
 	if err != nil {
 		fmt.Printf("Error resolving peer IP address: %v\n", err)
 		return nil
 	}
 
-	return &Peer{ip: &ipAddr.IP, conn: nil, encoder: nil, decoder: nil}
+	return &Peer{id: id, ip: &ipAddr.IP, conn: nil, encoder: nil, decoder: nil}
 }
 
 func (p *Peer) call() error {

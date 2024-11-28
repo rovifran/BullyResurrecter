@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 )
 
 func main() {
@@ -22,22 +25,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	node := NewNode(cliId)
+	go func() {
+		<-ctx.Done()
+		fmt.Println("Received interrupt signal, shutting down")
+		node.Close()
+	}()
+
 
 	node.CreateTopology(bullyNodes)
 	node.Run()
-}
-
-
-type MessageType int
-
-const (
-	MessageTypePing MessageType = iota
-	MessageTypePong
-)
-
-type Message struct {
-	PeerId int
-	Type   MessageType
-	Seq    int
 }

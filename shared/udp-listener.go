@@ -1,42 +1,10 @@
-package main
+package shared
 
 import (
 	"encoding/gob"
 	"fmt"
 	"net"
-	"os"
-	"strconv"
-	"time"
 )
-
-const (
-	messagePing = "ping\n" // Initial message
-	messagePong = "pong\n" // Response to the message
-)
-
-func main() {
-	cliId, err := strconv.Atoi(os.Getenv("CLI_ID"))
-	if err != nil {
-		fmt.Printf("Error getting CLI_ID: %v\n", err)
-		os.Exit(1)
-	}
-	if cliId == 0 {
-		fmt.Println("CLI_ID not specified")
-		os.Exit(1)
-	}
-	// bullyNodes, err := strconv.Atoi(os.Getenv("BULLY_NODES"))
-	// if err != nil {
-	// 	fmt.Printf("Error getting BULLY_NODES: %v\n", err)
-	// 	os.Exit(1)
-	// }
-
-	go RunUDPListener(8000)
-
-	for {
-		time.Sleep(2 * time.Second)
-		fmt.Printf("Hello, i am process: %d\n", cliId)
-	}
-}
 
 type MessageType1 int
 
@@ -62,7 +30,6 @@ func ListenUDP(port int) (*net.UDPConn, error) {
 }
 
 func RunUDPListener(port int) error {
-	fmt.Printf("Running UDP listener on port %d\n", port)
 	conn, err := ListenUDP(port)
 	if err != nil {
 		return err
