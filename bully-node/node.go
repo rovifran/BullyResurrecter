@@ -72,7 +72,7 @@ func (n *Node) Run() {
 	n.wg.Add(1)
 	go n.Listen() // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
 	time.Sleep(2 * time.Second)
-	n.StartElection() // siempre queremos arrancar una eleccion cuando se levanta el nodo
+	go n.StartElection() // siempre queremos arrancar una eleccion cuando se levanta el nodo
 	n.wg.Done()
 
 	<-n.stopChan
