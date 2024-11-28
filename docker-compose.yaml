@@ -9,38 +9,38 @@ networks:
           gateway: 10.5.0.1
 
 services:
-  processes-1:
-    container_name: processes-1
-    image: processes:latest
-    entrypoint: ["/processes"]
-    networks:
-      poc:
-        ipv4_address: 10.5.1.4
-    environment:
-      - BULLY_NODES=2
-      - CLI_ID=1
+  # processes-1:
+  #   container_name: processes-1
+  #   image: processes:latest
+  #   entrypoint: ["/processes"]
+  #   networks:
+  #     poc:
+  #       ipv4_address: 10.5.1.4
+  #   environment:
+  #     - BULLY_NODES=2
+  #     - CLI_ID=1
 
-  processes-2:
-    container_name: processes-2
-    image: processes:latest
-    entrypoint: ["/processes"]
-    networks:
-      poc:
-        ipv4_address: 10.5.1.5
-    environment:
-      - BULLY_NODES=2
-      - CLI_ID=2
+  # processes-2:
+  #   container_name: processes-2
+  #   image: processes:latest
+  #   entrypoint: ["/processes"]
+  #   networks:
+  #     poc:
+  #       ipv4_address: 10.5.1.5
+  #   environment:
+  #     - BULLY_NODES=2
+  #     - CLI_ID=2
 
-  processes-3:
-    container_name: processes-3
-    image: processes:latest
-    entrypoint: ["/processes"]
-    networks:
-      poc:
-        ipv4_address: 10.5.1.6
-    environment:
-      - BULLY_NODES=3
-      - CLI_ID=3
+  # processes-3:
+  #   container_name: processes-3
+  #   image: processes:latest
+  #   entrypoint: ["/processes"]
+  #   networks:
+  #     poc:
+  #       ipv4_address: 10.5.1.6
+  #   environment:
+  #     - BULLY_NODES=3
+  #     - CLI_ID=3
 
 
   bully-node-1:
@@ -51,7 +51,7 @@ services:
       poc:
         ipv4_address: 10.5.1.1
     environment:
-      - BULLY_NODES=3
+      - BULLY_NODES=4
       - CLI_ID=1
 
   bully-node-2:
@@ -62,7 +62,7 @@ services:
       poc:
         ipv4_address: 10.5.1.2
     environment:
-      - BULLY_NODES=3
+      - BULLY_NODES=4
       - CLI_ID=2
 
   bully-node-3:
@@ -73,5 +73,16 @@ services:
       poc:
         ipv4_address: 10.5.1.3
     environment:
-      - BULLY_NODES=3
+      - BULLY_NODES=4
       - CLI_ID=3
+
+  bully-node-4:
+    container_name: bully-node-4
+    image: bully-node:latest
+    entrypoint: ["/bully-node"]
+    networks:
+      poc:
+        ipv4_address: 10.5.1.4
+    environment:
+      - BULLY_NODES=4
+      - CLI_ID=4
