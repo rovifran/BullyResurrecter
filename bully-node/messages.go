@@ -13,5 +13,4 @@ const (
 type Message struct {
 	PeerId int
 	Type   MessageType
-	Seq    int
 }

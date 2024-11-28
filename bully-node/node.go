@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bullyresurrecter/shared"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -21,30 +22,25 @@ const (
 	NodeStateCoordinator
 )
 
-const (
-	ElectionTimeout   = 5 * time.Second
-	OkResponseTimeout = 2 * time.Second
-	PongTimeout       = 3 * time.Second
-)
-
 type Node struct {
 	id            int
 	peers         []*Peer
 	serverConn    *net.TCPListener
 	serverAddr    *net.TCPAddr
-	peerLock      sync.Mutex
+	lock          sync.Mutex
 	state         NodeState
 	currentLeader int
 	stopChan      chan struct{}
 	coordChan     chan *Message
+	electionLock  sync.Mutex
+	inElection    bool
+	electionChan  chan struct{}
 }
 
 const INACTIVE_LEADER = -1
 
 func NewNode(id int) *Node {
 	peers := []*Peer{}
-	stopChan := make(chan struct{})
-	coordChan := make(chan *Message)
 
 	serverAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("10.5.1.%d:8000", id))
 	if err != nil {
@@ -56,11 +52,14 @@ func NewNode(id int) *Node {
 		id:            id,
 		peers:         peers,
 		serverAddr:    serverAddr,
-		peerLock:      sync.Mutex{},
+		lock:          sync.Mutex{},
 		state:         NodeStateFollower,
 		currentLeader: INACTIVE_LEADER,
-		stopChan:      stopChan,
-		coordChan:     coordChan,
+		stopChan:      make(chan struct{}),
+		coordChan:     make(chan *Message),
+		electionChan:  make(chan struct{}),
+		electionLock:  sync.Mutex{},
+		inElection:    false,
 	}
 }
 
@@ -70,28 +69,36 @@ func (n *Node) Close() {
 			fmt.Printf("Error closing server connection: %v\n", err)
 		}
 	}
+	close(n.stopChan)
+	// TODO: cerrar las conexiones con los peers
 }
 
 func (n *Node) Run() {
 	fmt.Printf("Running node %d\n", n.id)
-	go n.Listen()        // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
+	go n.Listen() // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
+	time.Sleep(2 * time.Second)
 	go n.StartElection() // siempre queremos arrancar una eleccion cuando se levanta el nodo
 
 	<-n.stopChan
 }
 
 func (n *Node) StartElection() {
-	if n.GetState() == NodeStateCandidate || n.GetState() == NodeStateWaitingCoordinator {
-		return // si ya soy candidato, significa que alguien ya me envió un mensaje de eleccion y estoy esperando a que termine
+	n.lock.Lock()
+	state := n.state
+	if state == NodeStateCandidate || state == NodeStateWaitingCoordinator {
+		log.Printf("Node %d is already a candidate or coordinator, skipping election", n.id)
+		n.lock.Unlock()
+		return
 	}
+	n.state = NodeStateCandidate
+	n.lock.Unlock()
 
 	log.Printf("Node %d starting election\n", n.id)
-	n.ChangeState(NodeStateCandidate)
 
 	// Keep track of which peers we're waiting for responses from
 	waitingResponses := make(map[int]bool)
 	responseChan := make(chan int) // Channel to receive OK responses
-	timeoutChan := time.After(ElectionTimeout)
+	timeoutChan := time.After(shared.ElectionTimeout)
 
 	// Send election messages only to higher-numbered peers
 	for _, peer := range n.peers {
@@ -110,7 +117,7 @@ func (n *Node) StartElection() {
 			// Start a goroutine to wait for OK response from this peer
 			go func(peerId int) {
 				response := new(Message)
-				if err := peer.conn.SetReadDeadline(time.Now().Add(OkResponseTimeout)); err != nil {
+				if err := peer.conn.SetReadDeadline(time.Now().Add(shared.OkResponseTimeout)); err != nil {
 					log.Printf("Error setting read deadline for peer %d: %v", peerId, err)
 					return
 				}
@@ -128,6 +135,7 @@ func (n *Node) StartElection() {
 
 	// If no higher-numbered peers, become leader immediately
 	if len(waitingResponses) == 0 {
+		log.Printf("No higher-numbered peers, becoming leader")
 		go n.BecomeLeader()
 		return
 	}
@@ -146,8 +154,9 @@ func (n *Node) StartElection() {
 			log.Printf("Election timeout reached for node %d", n.id)
 			if n.GetState() == NodeStateCandidate {
 				go n.BecomeLeader()
+				return
 			} else {
-				log.Printf("Node %d is not a candidate, waiting for coordinator", n.id)
+				log.Printf("Node %d is not a candidate, waiting for coordinator", n.id) // recibio por lo menos un ok
 				go n.waitForCoordinator()
 				return
 			}
@@ -159,54 +168,58 @@ func (n *Node) StartElection() {
 
 func (n *Node) waitForCoordinator() {
 	// Wait for coordinator message with timeout
-	coordTimeout := time.After(ElectionTimeout + OkResponseTimeout)
+	coordTimeout := time.After(shared.ElectionTimeout + shared.OkResponseTimeout)
 
+	log.Printf("Node %d waiting for coordinator\n", n.id)
 	for {
+
 		select {
 		case <-coordTimeout:
 			// If we timeout waiting for coordinator, start new election
 			log.Printf("Timeout waiting for coordinator, starting new election")
-			n.ChangeState(NodeStateFollower)
-			n.StartElection()
+			n.SetCurrentLeader(INACTIVE_LEADER)
+			go n.StartElection()
 			return
 		case message := <-n.coordChan:
 			log.Printf("Received coordinator message from %d\n", message.PeerId)
 			n.ChangeState(NodeStateFollower)
-			go n.startFollowerLoop(message.PeerId)
+			go n.startFollowerLoop()
 			return
 		}
 	}
 }
 
-func (n *Node) startFollowerLoop(leaderId int) {
+func (n *Node) startFollowerLoop() {
 	log.Printf("Node %d starting follower loop\n", n.id)
 
-	var leaderPeer *Peer
-	for _, peer := range n.peers {
-		if peer.id == leaderId {
-			leaderPeer = peer
-			break
-		}
-	}
-
-	if leaderPeer == nil {
-		log.Printf("Leader peer not found, stopping follower loop")
-		return
-	}
-	leaderPeer.conn.SetReadDeadline(time.Now().Add(PongTimeout))
-
 	for {
+
 		select {
 		case <-n.stopChan:
 			return
-		case <-time.After(1 * time.Second):
+		case <-time.After(shared.PingToLeaderTimeout):
+			log.Printf("Node %d sending ping to leader %d\n", n.id, n.GetCurrentLeader())
+			var leaderPeer *Peer
+			leaderId := n.GetCurrentLeader()
+			for _, peer := range n.peers {
+				if peer.id == leaderId {
+					leaderPeer = peer
+					break
+				}
+			}
+
+			if leaderPeer == nil {
+				log.Printf("Leader peer not found, stopping follower loop and starting new election")
+				go n.StartElection()
+				return
+			}
 			log.Printf("Node %d sending ping to leader %d\n", n.id, leaderId)
 			if err := leaderPeer.Send(Message{PeerId: n.id, Type: MessageTypePing}); err != nil {
 				log.Printf("Error sending ping to leader %d: %v", leaderId, err)
 			}
-			if err := leaderPeer.conn.SetReadDeadline(time.Now().Add(PongTimeout)); err != nil {
+			if err := leaderPeer.conn.SetReadDeadline(time.Now().Add(shared.PongTimeout)); err != nil {
 				log.Printf("Error setting read deadline for leader %d: %v", leaderId, err)
-
+				continue
 			}
 			response := new(Message)
 			err := leaderPeer.decoder.Decode(response)
@@ -216,10 +229,18 @@ func (n *Node) startFollowerLoop(leaderId int) {
 			}
 
 			if errors.Is(err, os.ErrDeadlineExceeded) {
+				newLeaderId := n.GetCurrentLeader()
+				if newLeaderId == leaderId { // si es distinto, significa que el lider cambió y ya no hay que tirarle ping a ese
+				log.Printf("Leader %d not responding, starting new election", leaderId)
 				log.Printf("Leader %d not responding, starting new election", leaderId)
 				n.ChangeState(NodeStateFollower)
-				go n.StartElection()
-				return
+					log.Printf("Leader %d not responding, starting new election", leaderId)
+				n.ChangeState(NodeStateFollower)
+					go n.StartElection()
+					return
+				}
+				log.Printf("Leader changed while waiting for pong, now leader is %d", newLeaderId)
+				continue
 			}
 
 			if response.Type == MessageTypePong {
@@ -247,28 +268,49 @@ func (n *Node) BecomeLeader() {
 
 func (n *Node) StartLeaderLoop() {
 	log.Printf("Node %d starting leader loop\n", n.id)
+	for {
+		select {
+		case <-n.stopChan:
+			return
+		case <-time.After(1 * time.Second):
+			log.Printf("I'm the leader, Node %d\n", n.id)
+		}
+	}
+}
 
+func (n *Node) GetCurrentLeader() int {
+	n.lock.Lock()
+	defer n.lock.Unlock()
+
+	return n.currentLeader
 }
 
 func (n *Node) SetCurrentLeader(leaderId int) {
-	n.peerLock.Lock()
-	defer n.peerLock.Unlock()
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
 	n.currentLeader = leaderId
 }
 
 func (n *Node) GetState() NodeState {
-	n.peerLock.Lock()
-	defer n.peerLock.Unlock()
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
 	return n.state
 }
 
 func (n *Node) ChangeState(state NodeState) {
-	n.peerLock.Lock()
-	defer n.peerLock.Unlock()
+	n.lock.Lock()
+	defer n.lock.Unlock()
 
 	n.state = state
+}
+
+func (n *Node) IsInElection() bool {
+	n.electionLock.Lock()
+	defer n.electionLock.Unlock()
+
+	return n.inElection
 }
 
 func (n *Node) CreateTopology(bullyNodes int) {
@@ -298,7 +340,6 @@ func (n *Node) Listen() {
 	n.serverConn = serverConn
 
 	for {
-
 		conn, err := serverConn.AcceptTCP()
 		if err != nil {
 			fmt.Printf("Error accepting connection: %v\n", err)
@@ -342,38 +383,49 @@ func (n *Node) RespondToPeer(conn *net.TCPConn) {
 	}
 }
 
+// handleMessage implements the logic to respond to the different types of messages
+// that the node receives from a peer. This set of messages only includes those that
+// matter when acting as the server for incoming nodes (i.e. the messages a node sends
+// to its peers, not the ones that come from the outside).
 func (n *Node) handleMessage(message *Message, encoder *gob.Encoder) {
 	switch message.Type {
 	case MessageTypePing:
-		n.RespondToPing(message, encoder)
+		n.handlePing(message, encoder)
 	case MessageTypeElection:
-		n.RespondToElection(message, encoder)
-		go n.StartElection()
+		n.handleElection(message, encoder)
 	case MessageTypeCoordinator:
-		n.RespondToCoordinator(message, encoder)
+		n.handleCoordinator(message)
+	}
+}
+
+func (n *Node) handleCoordinator(message *Message) {
+	log.Printf("Received coordinator from %d, state: %d", message.PeerId, n.GetState())
+	if n.GetState() == NodeStateWaitingCoordinator {
 		n.coordChan <- message
+		return
+	}
+	n.SetCurrentLeader(message.PeerId)
+	state := n.GetState()
+	if state != NodeStateFollower {
+		log.Printf("Node %d is not a follower, starting follower loop", n.id)
+		n.ChangeState(NodeStateFollower)
+		go n.startFollowerLoop()
 	}
 }
 
-func (n *Node) RespondToCoordinator(message *Message, encoder *gob.Encoder) {
-	log.Printf("Received coordinator from %d\n", message.PeerId)
-	msg := Message{PeerId: n.id, Type: MessageTypeCoordinator, Seq: message.Seq}
-	if err := encoder.Encode(msg); err != nil {
-		fmt.Printf("Error sending coordinator message: %v\n", err)
-	}
-}
-
-func (n *Node) RespondToPing(message *Message, encoder *gob.Encoder) {
+func (n *Node) handlePing(message *Message, encoder *gob.Encoder) {
 	log.Printf("Received ping from %d, sending pong\n", message.PeerId)
-	msg := Message{PeerId: n.id, Type: MessageTypePong, Seq: message.Seq}
+	msg := Message{PeerId: n.id, Type: MessageTypePong}
 	if err := encoder.Encode(msg); err != nil {
 		fmt.Printf("Error sending pong message: %v\n", err)
 	}
 }
-func (n *Node) RespondToElection(message *Message, encoder *gob.Encoder) {
+
+func (n *Node) handleElection(message *Message, encoder *gob.Encoder) {
 	log.Printf("Received election from %d, sending ok\n", message.PeerId)
-	msg := Message{PeerId: n.id, Type: MessageTypeOk, Seq: message.Seq}
+	msg := Message{PeerId: n.id, Type: MessageTypeOk}
 	if err := encoder.Encode(msg); err != nil {
 		fmt.Printf("Error sending ok message: %v\n", err)
 	}
+	go n.StartElection()
 }
