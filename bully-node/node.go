@@ -251,6 +251,7 @@ func (n *Node) startFollowerLoop() {
 }
 
 func (n *Node) BecomeLeader() {
+	oldLeader := n.GetCurrentLeader()
 	log.Printf("Node %d becoming leader\n", n.id)
 	n.ChangeState(NodeStateCoordinator)
 	n.SetCurrentLeader(n.id)
@@ -263,7 +264,9 @@ func (n *Node) BecomeLeader() {
 	}
 
 	// Start leader loop
-	n.StartLeaderLoop()
+	if oldLeader != n.id {
+		go n.StartLeaderLoop()
+	}
 }
 
 func (n *Node) StartLeaderLoop() {
