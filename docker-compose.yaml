@@ -59,6 +59,8 @@ services:
     environment:
       - BULLY_NODES=3
       - CLI_ID=1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   bully-node-2:
     container_name: bully-node-2
@@ -70,6 +72,8 @@ services:
     environment:
       - BULLY_NODES=3
       - CLI_ID=2
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
 
   bully-node-3:
     container_name: bully-node-3
@@ -81,3 +85,5 @@ services:
     environment:
       - BULLY_NODES=3
       - CLI_ID=3
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock

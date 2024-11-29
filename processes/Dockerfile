@@ -1,12 +1,14 @@
 FROM golang:alpine AS builder
 LABEL intermediateStageToBeDeleted=true
 
+RUN apk update
+RUN apk add docker
+
 # Change the working directory to /app instead of /build
 WORKDIR /app
 
 # Copy go.mod and go.sum files
 COPY ./go.mod ./
-
 
 # Download dependencies
 RUN go mod download

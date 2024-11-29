@@ -1,8 +1,10 @@
 package shared
 
 import (
+	"bytes"
 	"encoding/gob"
 	"fmt"
+	"log"
 	"net"
 )
 
@@ -13,42 +15,66 @@ const (
 	MessageTypePong MessageType1 = 1
 )
 
-	
 func ListenUDP(port int) (*net.UDPConn, error) {
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
 		return nil, err
 	}
+
 	conn, err := net.ListenUDP("udp", addr)
 	if err != nil {
 		return nil, err
 	}
+	log.Printf("Listening on %s", addr)
 	return conn, nil
 }
 
 func RunUDPListener(port int) error {
+	gob.Register(ResurrecterMessage{})
 	conn, err := ListenUDP(port)
 	if err != nil {
 		return err
 	}
-	decoder := gob.NewDecoder(conn)
-	encoder := gob.NewEncoder(conn)
-	handleConnection(decoder, encoder)
+	handleConnection(conn)
 	return nil
 }
 
-func handleConnection(decoder *gob.Decoder, encoder *gob.Encoder) {
+func handleConnection(conn *net.UDPConn) {
+
+	buffer := make([]byte, 1024)
 	for {
-		msg := new(ResurrecterMessage)
-		err := decoder.Decode(msg)
+		log.Printf("Waiting for message")
+		n, remoteAddr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
+			fmt.Printf("Error reading from UDP: %v\n", err)
+			continue
+		}
+
+		log.Printf("Received message from %s, bytes %d", remoteAddr, n)
+		var msg ResurrecterMessage
+		decoder := gob.NewDecoder(bytes.NewReader(buffer[:n]))
+		if err := decoder.Decode(&msg); err != nil {
 			fmt.Printf("Error decoding message: %v\n", err)
 			continue
 		}
+
 		switch msg.Message {
 		case "ping":
-			if err := encoder.Encode(ResurrecterMessage{Message: "pong", processName: msg.processName}); err != nil {
+			response := ResurrecterMessage{
+				Message:     "pong",
+				ProcessName: msg.ProcessName,
+			}
+
+			var buf bytes.Buffer
+			encoder := gob.NewEncoder(&buf)
+			if err := encoder.Encode(response); err != nil {
 				fmt.Printf("Error encoding message: %v\n", err)
+				continue
+			}
+
+			_, err = conn.WriteToUDP(buf.Bytes(), remoteAddr)
+			if err != nil {
+				fmt.Printf("Error sending response: %v\n", err)
 			}
 		}
 	}

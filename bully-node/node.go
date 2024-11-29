@@ -265,9 +265,9 @@ func (n *Node) StartLeaderLoop() {
 	log.Printf("Node %d starting leader loop\n", n.id)
 
 	processList := PROCESS_LIST
-	for _, process := range processList {
+	for i, process := range processList {
 		resurrecter := NewResurrecter(process, make(chan struct{}))
-		go resurrecter.Start()
+		go resurrecter.Start(8080 + i + 1) // +1 porque el puerto 8080 esta reservado para tambien escuchar por udp
 	}
 	for n.GetState() == NodeStateCoordinator {
 		select {
