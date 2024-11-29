@@ -32,6 +32,7 @@ type Node struct {
 	currentLeader int
 	stopChan      chan struct{}
 	wg            sync.WaitGroup
+	electionLock  *sync.Mutex
 }
 
 const INACTIVE_LEADER = -1
@@ -54,6 +55,7 @@ func NewNode(id int) *Node {
 		currentLeader: INACTIVE_LEADER,
 		stopChan:      make(chan struct{}),
 		wg:            sync.WaitGroup{},
+		electionLock:  &sync.Mutex{},
 	}
 }
 
@@ -79,14 +81,17 @@ func (n *Node) Run() {
 }
 
 func (n *Node) StartElection() {
-	n.lock.Lock()
-	state := n.state
-	if state == NodeStateCandidate || state == NodeStateWaitingCoordinator {
-		n.lock.Unlock() // si ya estamos en estado candidato o esperando coordinador, no hacemos nada porque ya estamos en proceso de eleccion
-		return
-	}
-	n.state = NodeStateCandidate
-	n.lock.Unlock()
+	// n.lock.Lock()
+	// state := n.state
+	// if state == NodeStateCandidate || state == NodeStateWaitingCoordinator {
+	// 	n.lock.Unlock() // si ya estamos en estado candidato o esperando coordinador, no hacemos nada porque ya estamos en proceso de eleccion
+	// 	return
+	// }
+	// n.state = NodeStateCandidate
+	// n.lock.Unlock()
+	n.electionLock.Lock()
+	defer n.electionLock.Unlock()
+	n.ChangeState(NodeStateCandidate)
 
 	log.Printf("Node %d starting election\n", n.id)
 
@@ -158,7 +163,7 @@ electionLoop:
 				go n.BecomeLeader()
 				return
 			} else {
-				log.Printf("Node %d is not a candidate, waiting for coordinator", n.id) // recibio por lo menos un ok
+				log.Printf("Node %d is not a candidate (state: %d), waiting for coordinator", n.id, n.GetState()) // recibio por lo menos un ok
 				go n.waitForCoordinator()
 				return
 			}
@@ -384,12 +389,12 @@ func (n *Node) handleCoordinator(message *Message) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
 
+	log.Printf("Received coordinator from %d, state: %d", message.PeerId, n.state)
+	n.state = NodeStateFollower
 	if n.currentLeader == message.PeerId {
 		return
 	}
-	log.Printf("Received coordinator from %d, state: %d", message.PeerId, n.state)
 	n.currentLeader = message.PeerId
-	n.state = NodeStateFollower
 	go n.startFollowerLoop(message.PeerId)
 }
 
