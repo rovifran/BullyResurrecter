@@ -22,9 +22,10 @@ const (
 	NodeStateCoordinator
 )
 
-var PROCESS_LIST = []string{"processes-1", "processes-2", "processes-3"}
+var PROCESS_LIST = []string{"processes-1", "processes-2", "processes-3", "bully-node-1", "bully-node-2", "bully-node-3"}
 
 type Node struct {
+	name          string
 	id            int
 	peers         []*Peer
 	serverConn    *net.TCPListener
@@ -35,6 +36,7 @@ type Node struct {
 	stopChan      chan struct{}
 	wg            sync.WaitGroup
 	electionLock  *sync.Mutex
+	stopLeader    chan struct{}
 }
 
 const INACTIVE_LEADER = -1
@@ -49,6 +51,7 @@ func NewNode(id int) *Node {
 	}
 
 	return &Node{
+		name:          fmt.Sprintf("bully-node-%d", id),
 		id:            id,
 		peers:         peers,
 		serverAddr:    serverAddr,
@@ -58,21 +61,23 @@ func NewNode(id int) *Node {
 		stopChan:      make(chan struct{}),
 		wg:            sync.WaitGroup{},
 		electionLock:  &sync.Mutex{},
+		stopLeader:    make(chan struct{}),
 	}
 }
 
 func (n *Node) Close() {
+	close(n.stopChan)
 	if n.serverConn != nil {
 		if err := n.serverConn.Close(); err != nil {
 			fmt.Printf("Error closing server connection: %v\n", err)
 		}
 	}
-	close(n.stopChan)
 	// TODO: cerrar las conexiones con los peers
 }
 
 func (n *Node) Run() {
 	fmt.Printf("Running node %d\n", n.id)
+	go shared.RunUDPListener(8080)
 	n.wg.Add(1)
 	go n.Listen() // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
 	time.Sleep(2 * time.Second)
@@ -162,6 +167,7 @@ electionLoop:
 			// or we wait for coordinator if we are waiting for one
 			log.Printf("Election timeout reached for node %d", n.id)
 			if n.GetState() == NodeStateCandidate {
+				log.Printf("Node %d is a candidate and the election timed out, becoming leader", n.id)
 				go n.BecomeLeader()
 				return
 			} else {
@@ -204,7 +210,7 @@ func (n *Node) startFollowerLoop(leaderId int) {
 				}
 			}
 
-			if leaderPeer == nil || leaderId == INACTIVE_LEADER {
+			if leaderPeer == nil || leaderId == INACTIVE_LEADER || leaderPeer.conn == nil {
 				log.Printf("Leader peer not found, stopping follower loop and starting new election")
 				go n.StartElection()
 				return
@@ -246,7 +252,9 @@ func (n *Node) BecomeLeader() {
 	oldLeader := n.GetCurrentLeader()
 	log.Printf("Node %d becoming leader\n", n.id)
 	n.ChangeState(NodeStateCoordinator)
+	log.Printf("Setting the current leader to %d\n", n.id)
 	n.SetCurrentLeader(n.id)
+	log.Printf("Sending coordinator message to all peers\n")
 
 	// Send coordinator message to all peers
 	for _, peer := range n.peers {
@@ -256,6 +264,7 @@ func (n *Node) BecomeLeader() {
 	}
 
 	// Start leader loop
+	log.Printf("Old leader: %d, new leader: %d\n", oldLeader, n.id)
 	if oldLeader != n.id {
 		go n.StartLeaderLoop()
 	}
@@ -265,13 +274,22 @@ func (n *Node) StartLeaderLoop() {
 	log.Printf("Node %d starting leader loop\n", n.id)
 
 	processList := PROCESS_LIST
+	stopResurrecters := make(chan struct{})
 	for i, process := range processList {
-		resurrecter := NewResurrecter(process, make(chan struct{}))
+		if process == n.name {
+			continue
+		}
+		resurrecter := NewResurrecter(process, stopResurrecters)
 		go resurrecter.Start(8080 + i + 1) // +1 porque el puerto 8080 esta reservado para tambien escuchar por udp
 	}
-	for n.GetState() == NodeStateCoordinator {
+	for {
 		select {
+
 		case <-n.stopChan:
+			return
+		case <-n.stopLeader:
+			log.Printf("Stopping leader loop")
+			close(stopResurrecters)
 			return
 		case <-time.After(1 * time.Second):
 			log.Printf("I'm the leader, Node %d\n", n.id)
@@ -312,8 +330,8 @@ func (n *Node) CreateTopology(bullyNodes int) {
 		if i == n.id {
 			continue
 		}
-		peerIp := fmt.Sprintf("10.5.1.%d", i)
-		peer := NewPeer(i, &peerIp)
+		peerName := fmt.Sprintf("bully-node-%d", i)
+		peer := NewPeer(i, &peerName)
 		if peer != nil {
 			n.peers = append(n.peers, peer)
 		}
@@ -334,13 +352,20 @@ func (n *Node) Listen() {
 	n.serverConn = serverConn
 
 	for {
-		conn, err := serverConn.AcceptTCP()
-		if err != nil {
-			fmt.Printf("Error accepting connection: %v\n", err)
-			continue
+		select {
+		case <-n.stopChan:
+			return
+		default:
+			conn, err := serverConn.AcceptTCP()
+			if err != nil && errors.Is(err, io.EOF) {
+				return
+			}
+			if err != nil {
+				fmt.Printf("Error accepting connection: %v\n", err)
+				continue
+			}
+			go n.RespondToPeer(conn)
 		}
-
-		go n.RespondToPeer(conn)
 	}
 }
 
@@ -396,8 +421,18 @@ func (n *Node) handleMessage(message *Message, encoder *gob.Encoder) {
 func (n *Node) handleCoordinator(message *Message) {
 	n.lock.Lock()
 	defer n.lock.Unlock()
-
 	log.Printf("Received coordinator from %d, state: %d", message.PeerId, n.state)
+
+	if n.id > message.PeerId {
+		log.Printf("Node %d is higher than %d, starting new election", n.id, message.PeerId)
+		go n.StartElection()
+		return
+	}
+
+	if n.state == NodeStateCoordinator {
+		n.stopLeader <- struct{}{}
+	}
+
 	n.state = NodeStateFollower
 	if n.currentLeader == message.PeerId {
 		return

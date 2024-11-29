@@ -28,13 +28,13 @@ func NewResurrecter(containerName string, stopChan chan struct{}) *Resurrecter {
 	log.Printf("NewResurrecter for %s", containerName)
 	connAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:8080", containerName))
 	if err != nil {
-		log.Fatalf("Error resolving UDP address: %v", err)
+		log.Printf("Couldn't resolve UDP address, asuming the process is down.")
 	}
 
 	log.Printf("Dialing UDP to %s", connAddr)
 	conn, err := net.DialUDP("udp", nil, connAddr)
 	if err != nil {
-		log.Fatalf("Error dialing UDP: %v", err)
+		log.Printf("Couldn't dial UDP, asuming the process is down.")
 	}
 
 	return &Resurrecter{
@@ -73,6 +73,12 @@ func (r *Resurrecter) RunMainLoop() {
 }
 
 func (r *Resurrecter) sendPing() {
+	if r.connAddr == nil {
+		log.Printf("Couldn't resolve UDP address, asuming the process is down.")
+		r.Resurrect()
+		return
+	}
+
 	message := shared.ResurrecterMessage{
 		Message:     "ping",
 		ProcessName: r.containerName,
@@ -104,7 +110,7 @@ func (r *Resurrecter) sendPing() {
 		n, _, err := r.conn.ReadFromUDP(response)
 		if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
 			retries++
-			pingTimeout *= 2	
+			pingTimeout *= 2
 			continue
 		}
 
@@ -117,8 +123,13 @@ func (r *Resurrecter) sendPing() {
 		return
 	}
 
-	log.Printf("Container %s is dead", r.containerName)
-	r.Resurrect()
+	select {
+	case <-r.stopChan:
+		return
+	case <-time.After(100 * time.Millisecond):
+		log.Printf("Container %s is dead", r.containerName)
+		r.Resurrect()
+	}
 }
 
 func (r *Resurrecter) Resurrect() {

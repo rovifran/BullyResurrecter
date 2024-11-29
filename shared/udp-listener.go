@@ -43,7 +43,6 @@ func handleConnection(conn *net.UDPConn) {
 
 	buffer := make([]byte, 1024)
 	for {
-		log.Printf("Waiting for message")
 		n, remoteAddr, err := conn.ReadFromUDP(buffer)
 		if err != nil {
 			fmt.Printf("Error reading from UDP: %v\n", err)
