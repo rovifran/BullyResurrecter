@@ -22,6 +22,8 @@ const (
 	NodeStateCoordinator
 )
 
+var PROCESS_LIST = []string{"processes-1", "processes-2", "processes-3"}
+
 type Node struct {
 	id            int
 	peers         []*Peer
@@ -261,6 +263,12 @@ func (n *Node) BecomeLeader() {
 
 func (n *Node) StartLeaderLoop() {
 	log.Printf("Node %d starting leader loop\n", n.id)
+
+	processList := PROCESS_LIST
+	for _, process := range processList {
+		resurrecter := NewResurrecter(process, make(chan struct{}))
+		go resurrecter.Start()
+	}
 	for n.GetState() == NodeStateCoordinator {
 		select {
 		case <-n.stopChan:

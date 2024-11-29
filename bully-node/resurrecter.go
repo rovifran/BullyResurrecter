@@ -52,7 +52,12 @@ func NewResurrecter(containerName string, stopChan chan struct{}) *Resurrecter {
 }
 
 func (r *Resurrecter) Start() {
-	conn, err := net.ListenUDP("udp", r.connAddr)
+	connAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", r.containerName, 8080))
+	if err != nil {
+		log.Fatalf("Error resolving UDP address: %v", err)
+	}
+	fmt.Printf("Listening on %s\n", connAddr)
+	conn, err := net.ListenUDP("udp", connAddr)
 	if err != nil {
 		log.Fatalf("Error listening on UDP: %v", err)
 	}
