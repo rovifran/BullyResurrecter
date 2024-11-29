@@ -13,10 +13,7 @@ const (
 	MessageTypePong MessageType1 = 1
 )
 
-type Message struct {
-	Type MessageType1
-}
-
+	
 func ListenUDP(port int) (*net.UDPConn, error) {
 	addr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
 	if err != nil {
@@ -42,15 +39,15 @@ func RunUDPListener(port int) error {
 
 func handleConnection(decoder *gob.Decoder, encoder *gob.Encoder) {
 	for {
-		msg := new(Message)
+		msg := new(ResurrecterMessage)
 		err := decoder.Decode(msg)
 		if err != nil {
 			fmt.Printf("Error decoding message: %v\n", err)
 			continue
 		}
-		switch msg.Type {
-		case MessageTypePing:
-			if err := encoder.Encode(Message{Type: MessageTypePong}); err != nil {
+		switch msg.Message {
+		case "ping":
+			if err := encoder.Encode(ResurrecterMessage{Message: "pong", processName: msg.processName}); err != nil {
 				fmt.Printf("Error encoding message: %v\n", err)
 			}
 		}
