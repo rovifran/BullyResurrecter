@@ -218,6 +218,7 @@ func (n *Node) startFollowerLoop(leaderId int) {
 			log.Printf("Node %d sending ping to leader %d\n", n.id, leaderId)
 			if err := leaderPeer.Send(Message{PeerId: n.id, Type: MessageTypePing}); err != nil {
 				log.Printf("Error sending ping to leader %d: %v", leaderId, err)
+				continue
 			}
 			if err := leaderPeer.conn.SetReadDeadline(time.Now().Add(shared.PongTimeout)); err != nil {
 				log.Printf("Error setting read deadline for leader %d: %v", leaderId, err)
