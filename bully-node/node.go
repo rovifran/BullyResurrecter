@@ -10,6 +10,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -192,7 +193,7 @@ func (n *Node) startFollowerLoop(leaderId int) {
 			return
 		case <-time.After(shared.PingToLeaderTimeout):
 			n.lock.Lock()
-			if n.currentLeader != leaderId || n.state != NodeStateFollower {
+			if n.currentLeader != leaderId {
 				n.lock.Unlock()
 				return
 			}
@@ -205,14 +206,10 @@ func (n *Node) startFollowerLoop(leaderId int) {
 				}
 			}
 
-			if leaderPeer == nil || leaderId == INACTIVE_LEADER || leaderPeer.conn == nil {
-				// log.Printf("Leader peer not found, stopping follower loop and starting new election")
-				go n.StartElection()
-				return
-			}
 			// log.Printf("Node %d sending ping to leader %d\n", n.id, leaderId)
 			if err := leaderPeer.Send(Message{PeerId: n.id, Type: MessageTypePing}); err != nil {
 				log.Printf("Error sending ping to leader %d: %v", leaderId, err)
+				go n.StartElection()
 				continue
 			}
 			if err := leaderPeer.conn.SetReadDeadline(time.Now().Add(shared.PongTimeout)); err != nil {
@@ -231,12 +228,10 @@ func (n *Node) startFollowerLoop(leaderId int) {
 				go n.StartElection()
 				return
 			}
-
 			if err != nil && !errors.Is(err, os.ErrDeadlineExceeded) {
 				log.Printf("Error decoding response from leader %d: %v", leaderId, err)
 				continue
 			}
-
 			if response.Type == MessageTypePong {
 				// log.Printf("Node %d received pong from leader %d\n", n.id, leaderId)
 			}
@@ -395,6 +390,16 @@ func (n *Node) RespondToPeer(conn *net.TCPConn) {
 		n.handleMessage(message, encoder)
 	}
 	log.Printf("Peer %s disconnected\n", conn.RemoteAddr().String())
+	n.ClosePeer(strings.Split(conn.RemoteAddr().String(), ":")[0])
+}
+
+func (n *Node) ClosePeer(ip string) {
+	for _, peer := range n.peers {
+		if strings.Split(peer.ip.String(), ":")[0] == ip {
+			peer.Close()
+			break
+		}
+	}
 }
 
 // handleMessage implements the logic to respond to the different types of messages

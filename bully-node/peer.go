@@ -52,8 +52,10 @@ func (p *Peer) call() error {
 
 func (p *Peer) Close() {
 	log.Printf("Closing connection to %s\n", p.ip.String())
-	p.conn.Close()
-	p.conn = nil
+	if p.conn != nil {
+		p.conn.Close()
+		p.conn = nil
+	}
 }
 
 func (p *Peer) Send(message Message) error {
