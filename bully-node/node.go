@@ -42,7 +42,7 @@ type Node struct {
 
 const INACTIVE_LEADER = -1
 
-func NewNode(id int) *Node {
+func NewNode(id int, stopContext context.Context) *Node {
 	peers := []*Peer{}
 
 	serverAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("10.5.1.%d:8000", id))
@@ -59,7 +59,7 @@ func NewNode(id int) *Node {
 		lock:          sync.Mutex{},
 		state:         NodeStateFollower,
 		currentLeader: INACTIVE_LEADER,
-		stopContext:   context.Background(),
+		stopContext:   stopContext,
 		wg:            sync.WaitGroup{},
 		electionLock:  &sync.Mutex{},
 		stopLeader:    make(chan struct{}),
@@ -67,14 +67,15 @@ func NewNode(id int) *Node {
 }
 
 func (n *Node) Close() {
-	n.stopContext.Done()
 	if n.serverConn != nil {
 		if err := n.serverConn.Close(); err != nil {
 			fmt.Printf("Error closing server connection: %v\n", err)
 		}
 	}
-
 	// TODO: cerrar las conexiones con los peers
+	for _, peer := range n.peers {
+		peer.Close()
+	}
 }
 
 func (n *Node) Run() {
@@ -272,16 +273,18 @@ func (n *Node) StartLeaderLoop() {
 		}
 		processList = append(processList, process)
 	}
-	stopResurrecters := context.Background()
+	stopResurrecters, cancel := context.WithCancel(context.Background())
 	resurrecter := NewResurrecter(processList, stopResurrecters)
 	go resurrecter.Start()
 	for {
 		select {
 		case <-n.stopContext.Done():
+			cancel()
 			return
 		case <-n.stopLeader:
 			// log.Printf("Stopping leader loop")
-			stopResurrecters.Done()
+			resurrecter.Close()
+			cancel()
 			return
 		}
 	}
@@ -421,6 +424,7 @@ func (n *Node) handleCoordinator(message *Message) {
 	}
 
 	if n.state == NodeStateCoordinator {
+		log.Printf("Stopping leader loop")
 		n.stopLeader <- struct{}{}
 	}
 

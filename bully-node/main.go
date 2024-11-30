@@ -28,7 +28,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	node := NewNode(cliId)
+	node := NewNode(cliId, ctx)
 	go func() {
 		<-ctx.Done()
 		fmt.Println("Received interrupt signal, shutting down")

@@ -58,7 +58,7 @@ func (p *Peer) Close() {
 
 func (p *Peer) Send(message Message) error {
 	defer func() {
-		recover() // a veces la falopa de message es nil pero tampoco nos deja comparar con nil porque Message es un tipo y no un struct opasniosafnoiasfinoas
+		recover() // a veces la falopa de message es nil pero no nos deja comparar con nil opasniosafnoiasfinoas
 	}()
 
 	log.Printf("Sending message to %s: %v\n", p.ip.String(), message)

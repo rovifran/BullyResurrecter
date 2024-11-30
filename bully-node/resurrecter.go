@@ -27,6 +27,12 @@ func NewResurrecter(processList [][]string, stopContext context.Context) *Resurr
 	}
 }
 
+func (r *Resurrecter) Close() {
+	if r.conn != nil {
+		r.conn.Close()
+	}
+}
+
 func (r *Resurrecter) Start() {
 	gob.Register(shared.ResurrecterMessage{})
 	connAddr, err := net.ResolveUDPAddr("udp", ":8081")
@@ -49,24 +55,27 @@ func (r *Resurrecter) Start() {
 	}
 
 	for {
-		r.receiveResponses(responseMap)
+		if err := r.receiveResponses(responseMap); err != nil {
+			r.Close()
+			return
+		}
 	}
 }
 
-func (r *Resurrecter) receiveResponses(responseMap map[string]chan struct{}) {
+func (r *Resurrecter) receiveResponses(responseMap map[string]chan struct{}) error {
 	for {
 		response := make([]byte, 1024)
 		n, _, err := r.conn.ReadFromUDP(response)
 		if err != nil {
-			log.Printf("Error receiving response: %v", err)
-			continue
+			// log.Printf("Error receiving response: %v", err)
+			return err
 		}
 
 		var message shared.ResurrecterMessage
 		decoder := gob.NewDecoder(bytes.NewReader(response[:n]))
 		if err := decoder.Decode(&message); err != nil {
 			log.Printf("Error decoding response: %v", err)
-			continue
+			return err
 		}
 
 		responseChan, ok := responseMap[message.ProcessName]
