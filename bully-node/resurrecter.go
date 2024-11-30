@@ -4,11 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"errors"
-	"fmt"
 	"log"
 	"net"
-	"os"
 	"time"
 
 	"bullyresurrecter/shared"
@@ -18,70 +15,91 @@ import (
 )
 
 type Resurrecter struct {
-	containerName string
-	connAddr      *net.UDPAddr
-	conn          *net.UDPConn
-	stopChan      chan struct{}
+	processList [][]string
+	conn        *net.UDPConn
+	stopContext context.Context
 }
 
-func NewResurrecter(containerName string, stopChan chan struct{}) *Resurrecter {
-	log.Printf("NewResurrecter for %s", containerName)
-	connAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:8080", containerName))
-	if err != nil {
-		log.Printf("Couldn't resolve UDP address, asuming the process is down.")
-	}
-
-	log.Printf("Dialing UDP to %s", connAddr)
-	conn, err := net.DialUDP("udp", nil, connAddr)
-	if err != nil {
-		log.Printf("Couldn't dial UDP, asuming the process is down.")
-	}
-
+func NewResurrecter(processList [][]string, stopContext context.Context) *Resurrecter {
 	return &Resurrecter{
-		containerName: containerName,
-		connAddr:      connAddr,
-		conn:          conn,
-		stopChan:      stopChan,
+		processList: processList,
+		stopContext: stopContext,
 	}
 }
 
-func (r *Resurrecter) Start(port int) {
+func (r *Resurrecter) Start() {
 	gob.Register(shared.ResurrecterMessage{})
-	connAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", port))
+	connAddr, err := net.ResolveUDPAddr("udp", ":8081")
 	if err != nil {
 		log.Fatalf("Error resolving UDP address: %v", err)
 	}
-	fmt.Printf("Listening on %s\n", connAddr)
+
 	conn, err := net.ListenUDP("udp", connAddr)
 	if err != nil {
 		log.Fatalf("Error listening on UDP: %v", err)
 	}
 	r.conn = conn
 
-	r.RunMainLoop()
+	responseMap := make(map[string]chan struct{})
+
+	for _, process := range r.processList {
+		processChan := make(chan struct{})
+		go r.RunMainLoop(process, processChan)
+		responseMap[process[0]] = processChan
+	}
+
+	for {
+		r.receiveResponses(responseMap)
+	}
 }
 
-func (r *Resurrecter) RunMainLoop() {
+func (r *Resurrecter) receiveResponses(responseMap map[string]chan struct{}) {
+	for {
+		response := make([]byte, 1024)
+		n, _, err := r.conn.ReadFromUDP(response)
+		if err != nil {
+			log.Printf("Error receiving response: %v", err)
+			continue
+		}
+
+		var message shared.ResurrecterMessage
+		decoder := gob.NewDecoder(bytes.NewReader(response[:n]))
+		if err := decoder.Decode(&message); err != nil {
+			log.Printf("Error decoding response: %v", err)
+			continue
+		}
+
+		responseChan, ok := responseMap[message.ProcessName]
+		if !ok {
+			log.Printf("Unknown process: %s", message.ProcessName)
+			continue
+		}
+
+		responseChan <- struct{}{}
+	}
+}
+
+func (r *Resurrecter) RunMainLoop(process []string, responseChan chan struct{}) {
 	for {
 		select {
-		case <-r.stopChan:
+		case <-r.stopContext.Done():
 			return
 		case <-time.After(shared.ResurrecterPingInterval):
-			r.sendPing()
+			r.sendPing(process, responseChan)
 		}
 	}
 }
 
-func (r *Resurrecter) sendPing() {
-	if r.connAddr == nil {
-		log.Printf("Couldn't resolve UDP address, asuming the process is down.")
-		r.Resurrect()
+func (r *Resurrecter) sendPing(process []string, responseChan chan struct{}) {
+	if r.conn == nil {
+		// log.Printf("Couldn't resolve UDP address, asuming the process is down.")
+		r.Resurrect(process[0])
 		return
 	}
 
 	message := shared.ResurrecterMessage{
 		Message:     "ping",
-		ProcessName: r.containerName,
+		ProcessName: process[0],
 	}
 
 	var buf bytes.Buffer
@@ -93,54 +111,41 @@ func (r *Resurrecter) sendPing() {
 
 	retries := 0
 	pingTimeout := shared.ResurrecterPingTimeout
-	for retries < shared.ResurrecterPingRetries {
-		log.Printf("Sending ping to %s", r.connAddr)
-		_, err := r.conn.WriteToUDP(buf.Bytes(), r.connAddr)
+
+	for {
+		_, err := r.conn.WriteToUDP(buf.Bytes(), &net.UDPAddr{IP: net.ParseIP(process[1]), Port: 8080})
 		if err != nil {
 			log.Printf("Error sending message: %v", err)
 			return
 		}
 
-		if err := r.conn.SetReadDeadline(time.Now().Add(pingTimeout)); err != nil {
-			log.Printf("Error setting read deadline: %v", err)
+		select {
+		case <-r.stopContext.Done():
 			return
-		}
-
-		response := make([]byte, 1024)
-		n, _, err := r.conn.ReadFromUDP(response)
-		if err != nil && errors.Is(err, os.ErrDeadlineExceeded) {
+		case <-responseChan:
+			return
+		case <-time.After(pingTimeout):
 			retries++
 			pingTimeout *= 2
-			continue
-		}
 
-		var answer shared.ResurrecterMessage
-		decoder := gob.NewDecoder(bytes.NewReader(response[:n]))
-		if err := decoder.Decode(&answer); err != nil {
-			log.Printf("Error decoding response: %v", err)
-			continue
+			if retries >= shared.ResurrecterPingRetries {
+				log.Printf("Container %s is dead", process[0])
+				r.Resurrect(process[0])
+				return
+			}
 		}
-		return
-	}
-
-	select {
-	case <-r.stopChan:
-		return
-	case <-time.After(100 * time.Millisecond):
-		log.Printf("Container %s is dead", r.containerName)
-		r.Resurrect()
 	}
 }
 
-func (r *Resurrecter) Resurrect() {
+func (r *Resurrecter) Resurrect(process string) {
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		log.Printf("Error creating Docker client: %v", err)
 		return
 	}
 
-	log.Printf("Restarting container: %s", r.containerName)
-	if err := cli.ContainerStart(context.Background(), r.containerName, container.StartOptions{}); err != nil {
+	log.Printf("Resurrecting container: %s", process)
+	if err := cli.ContainerStart(context.Background(), process, container.StartOptions{}); err != nil {
 		log.Printf("Error restarting container: %v", err)
 	}
 

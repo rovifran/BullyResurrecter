@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/gob"
 	"fmt"
-	"log"
 	"net"
 )
 
@@ -25,7 +24,6 @@ func ListenUDP(port int) (*net.UDPConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Listening on %s", addr)
 	return conn, nil
 }
 
@@ -49,7 +47,6 @@ func handleConnection(conn *net.UDPConn) {
 			continue
 		}
 
-		log.Printf("Received message from %s, bytes %d", remoteAddr, n)
 		var msg ResurrecterMessage
 		decoder := gob.NewDecoder(bytes.NewReader(buffer[:n]))
 		if err := decoder.Decode(&msg); err != nil {

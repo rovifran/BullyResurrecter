@@ -51,11 +51,17 @@ func (p *Peer) call() error {
 }
 
 func (p *Peer) Close() {
+	log.Printf("Closing connection to %s\n", p.ip.String())
 	p.conn.Close()
 	p.conn = nil
 }
 
 func (p *Peer) Send(message Message) error {
+	defer func() {
+		recover() // a veces la falopa de message es nil pero tampoco nos deja comparar con nil porque Message es un tipo y no un struct opasniosafnoiasfinoas
+	}()
+
+	log.Printf("Sending message to %s: %v\n", p.ip.String(), message)
 	if p.conn == nil {
 		err := p.call()
 		if err != nil {
@@ -66,7 +72,7 @@ func (p *Peer) Send(message Message) error {
 
 	err := p.encoder.Encode(message)
 	if err != nil && errors.Is(err, syscall.EPIPE) {
-		log.Printf("Peer %s disconnected: %v\n", p.ip.String(), err)
+		// log.Printf("Peer %s disconnected: %v\n", p.ip.String(), err)
 		p.Close()
 		return err
 	}
