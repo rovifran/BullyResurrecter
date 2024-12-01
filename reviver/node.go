@@ -269,7 +269,9 @@ func (n *Node) BecomeLeader() {
 
 	// Send coordinator message to all peers
 	for _, peer := range n.peers {
-		peer.Send(Message{PeerId: n.id, Type: MessageTypeCoordinator})
+		if err := peer.Send(Message{PeerId: n.id, Type: MessageTypeCoordinator}); err != nil {
+			log.Printf("Error sending coordinator message to peer %d with ip %s: %v", peer.id, peer.ip.String(), err)
+		}
 	}
 
 	if oldLeader != n.id {

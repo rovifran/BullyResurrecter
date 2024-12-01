@@ -37,12 +37,12 @@ func (r *Resurrecter) Start() {
 	gob.Register(shared.ResurrecterMessage{})
 	connAddr, err := net.ResolveUDPAddr("udp", ":8081")
 	if err != nil {
-		log.Fatalf("Error resolving UDP address: %v", err)
+		// log.Printf("Error resolving UDP address: %v", err)
 	}
 
 	conn, err := net.ListenUDP("udp", connAddr)
 	if err != nil {
-		log.Fatalf("Error listening on UDP: %v", err)
+		// log.Printf("Error listening on UDP: %v", err)
 	}
 	r.conn = conn
 
