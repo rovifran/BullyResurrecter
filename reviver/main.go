@@ -35,7 +35,6 @@ func main() {
 		node.Close()
 	}()
 
-
 	node.CreateTopology(bullyNodes)
 	node.Run()
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bullyresurrecter/shared"
 	"context"
+	"encoding/csv"
 	"encoding/gob"
 	"errors"
 	"fmt"
@@ -24,8 +25,6 @@ const (
 	NodeStateCoordinator
 )
 
-var PROCESS_LIST = [][]string{{"processes-1", "10.5.1.4"}, {"processes-2", "10.5.1.5"}, {"processes-3", "10.5.1.6"}, {"reviver-1", "10.5.1.1"}, {"reviver-2", "10.5.1.2"}, {"reviver-3", "10.5.1.3"}}
-
 type Node struct {
 	name          string
 	id            int
@@ -39,9 +38,41 @@ type Node struct {
 	wg            sync.WaitGroup
 	electionLock  *sync.Mutex
 	stopLeader    chan struct{}
+	processList   [][]string
+	inElection    bool
 }
 
 const INACTIVE_LEADER = -1
+
+const PROCESS_LIST_FILE = "name_ip.csv"
+
+func getProcessList(id int) [][]string {
+	processList := [][]string{}
+
+	file, err := os.Open(PROCESS_LIST_FILE)
+	if err != nil {
+		fmt.Printf("Error opening process list file: %v\n", err)
+		os.Exit(1)
+	}
+	defer file.Close()
+
+	reader := csv.NewReader(file)
+	for {
+		record, err := reader.Read()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			fmt.Printf("Error reading process list file: %v\n", err)
+			os.Exit(1)
+		}
+		if record[0] == fmt.Sprintf("reviver-%d", id) {
+			continue
+		}
+		processList = append(processList, record)
+	}
+	return processList
+}
 
 func NewNode(id int, stopContext context.Context) *Node {
 	peers := []*Peer{}
@@ -51,6 +82,8 @@ func NewNode(id int, stopContext context.Context) *Node {
 		fmt.Printf("Error resolving server address: %v\n", err)
 		os.Exit(1)
 	}
+
+	processList := getProcessList(id)
 
 	return &Node{
 		name:          fmt.Sprintf("reviver-%d", id),
@@ -64,6 +97,7 @@ func NewNode(id int, stopContext context.Context) *Node {
 		wg:            sync.WaitGroup{},
 		electionLock:  &sync.Mutex{},
 		stopLeader:    make(chan struct{}),
+		processList:   processList,
 	}
 }
 
@@ -94,6 +128,8 @@ func (n *Node) StartElection() {
 	n.electionLock.Lock()
 	defer n.electionLock.Unlock()
 	n.ChangeState(NodeStateCandidate)
+	n.inElection = true
+	defer func() { n.inElection = false }()
 
 	// Keep track of which peers we're waiting for responses from
 	waitingResponses := make(map[int]bool)
@@ -244,15 +280,8 @@ func (n *Node) BecomeLeader() {
 func (n *Node) StartLeaderLoop() {
 	log.Printf("Node %d is the new leader\n", n.id)
 
-	processList := make([][]string, 0)
-	for _, process := range PROCESS_LIST {
-		if process[0] == n.name {
-			continue
-		}
-		processList = append(processList, process)
-	}
 	stopResurrecters, cancel := context.WithCancel(context.Background())
-	resurrecter := NewResurrecter(processList, stopResurrecters)
+	resurrecter := NewResurrecter(n.processList, stopResurrecters)
 	go resurrecter.Start()
 	for {
 		select {
@@ -387,6 +416,7 @@ func (n *Node) handleCoordinator(message *Message) {
 	n.stateLock.Lock()
 	defer n.stateLock.Unlock()
 
+	log.Printf("Node %d received coordinator message from node %d", n.id, message.PeerId)
 	if n.id > message.PeerId {
 		go n.StartElection()
 		return
@@ -417,5 +447,7 @@ func (n *Node) handleElection(encoder *gob.Encoder) {
 	if err := encoder.Encode(msg); err != nil {
 		fmt.Printf("Error sending ok message: %v\n", err)
 	}
-	go n.StartElection()
+	if !n.inElection {
+		go n.StartElection()
+	}
 }
