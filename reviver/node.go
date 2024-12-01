@@ -24,7 +24,7 @@ const (
 	NodeStateCoordinator
 )
 
-var PROCESS_LIST = [][]string{{"processes-1", "10.5.1.4"}, {"processes-2", "10.5.1.5"}, {"processes-3", "10.5.1.6"}, {"bully-node-1", "10.5.1.1"}, {"bully-node-2", "10.5.1.2"}, {"bully-node-3", "10.5.1.3"}}
+var PROCESS_LIST = [][]string{{"processes-1", "10.5.1.4"}, {"processes-2", "10.5.1.5"}, {"processes-3", "10.5.1.6"}, {"reviver-1", "10.5.1.1"}, {"reviver-2", "10.5.1.2"}, {"reviver-3", "10.5.1.3"}}
 
 type Node struct {
 	name          string
@@ -53,7 +53,7 @@ func NewNode(id int, stopContext context.Context) *Node {
 	}
 
 	return &Node{
-		name:          fmt.Sprintf("bully-node-%d", id),
+		name:          fmt.Sprintf("reviver-%d", id),
 		id:            id,
 		peers:         peers,
 		serverAddr:    serverAddr,
@@ -79,7 +79,7 @@ func (n *Node) Close() {
 }
 
 func (n *Node) Run() {
-	fmt.Printf("Running node %d\n", n.id)
+	fmt.Printf("Running reviver %d\n", n.id)
 	go shared.RunUDPListener(8080)
 	n.wg.Add(1)
 	go n.Listen() // solo responde por esta conexión TCP, no arranca la topología nunca (no PING, no ELECTION, etc)
@@ -283,12 +283,12 @@ func (n *Node) ChangeState(state NodeState) {
 	n.state = state
 }
 
-func (n *Node) CreateTopology(bullyNodes int) {
-	for i := 1; i <= bullyNodes; i++ {
+func (n *Node) CreateTopology(reviverNodes int) {
+	for i := 1; i <= reviverNodes; i++ {
 		if i == n.id {
 			continue
 		}
-		peerName := fmt.Sprintf("bully-node-%d", i)
+		peerName := fmt.Sprintf("reviver-%d", i)
 		peer := NewPeer(i, &peerName)
 		if peer != nil {
 			n.peers = append(n.peers, peer)

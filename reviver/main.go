@@ -19,9 +19,9 @@ func main() {
 		fmt.Println("CLI_ID not specified")
 		os.Exit(1)
 	}
-	bullyNodes, err := strconv.Atoi(os.Getenv("BULLY_NODES"))
+	bullyNodes, err := strconv.Atoi(os.Getenv("CLI_TOPOLOGY_NODES"))
 	if err != nil {
-		fmt.Printf("Error getting BULLY_NODES: %v\n", err)
+		fmt.Printf("Error getting CLI_TOPOLOGY_NODES: %v\n", err)
 		os.Exit(1)
 	}
 

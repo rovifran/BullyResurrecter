@@ -21,8 +21,8 @@ COPY . .
 ENV GOCACHE=/root/.cache/go-build
 
 # Build the application
-RUN --mount=type=cache,target="/root/.cache/go-build" go build -o bin/bully-node ./bully-node
+RUN --mount=type=cache,target="/root/.cache/go-build" go build -o bin/reviver ./reviver
 
 FROM alpine:latest
-COPY --from=builder /app/bin/bully-node /bully-node
-ENTRYPOINT ["/bully-node"]
+COPY --from=builder /app/bin/reviver /reviver
+ENTRYPOINT ["/reviver"]

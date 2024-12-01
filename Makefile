@@ -16,7 +16,7 @@ all:
 # .PHONY: build
 
 docker-image:
-	docker build -f ./bully-node/Dockerfile -t "bully-node:latest" .
+	docker build -f ./reviver/Dockerfile -t "reviver:latest" .
 	docker build -f ./processes/Dockerfile -t "processes:latest" .
 	# docker build -f ./udp-comms/stop-and-wait/Dockerfile -t "stop-and-wait:latest" .
 	# Execute this command from time to time to clean up intermediate stages generated 
