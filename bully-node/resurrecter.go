@@ -67,7 +67,6 @@ func (r *Resurrecter) receiveResponses(responseMap map[string]chan struct{}) err
 		response := make([]byte, 1024)
 		n, _, err := r.conn.ReadFromUDP(response)
 		if err != nil {
-			// log.Printf("Error receiving response: %v", err)
 			return err
 		}
 
@@ -101,7 +100,6 @@ func (r *Resurrecter) RunMainLoop(process []string, responseChan chan struct{}) 
 
 func (r *Resurrecter) sendPing(process []string, responseChan chan struct{}) {
 	if r.conn == nil {
-		// log.Printf("Couldn't resolve UDP address, asuming the process is down.")
 		r.Resurrect(process[0])
 		return
 	}

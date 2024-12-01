@@ -4,11 +4,8 @@ package main // Representa a un PEER al que YO llamo y consulto, cuando el me co
 // en vez de A <--> B
 import (
 	"encoding/gob"
-	"errors"
 	"fmt"
-	"log"
 	"net"
-	"syscall"
 )
 
 type Peer struct {
@@ -23,7 +20,6 @@ type Peer struct {
 func NewPeer(id int, name *string) *Peer {
 	ipAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:8000", *name))
 	if err != nil {
-		fmt.Printf("Error resolving peer IP address: %v\n", err)
 		return nil
 	}
 
@@ -33,17 +29,13 @@ func NewPeer(id int, name *string) *Peer {
 func (p *Peer) call() error {
 	connAddr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("%s:8000", *p.name))
 	if err != nil {
-		log.Printf("Error resolving peer %s: %v\n", p.ip.String(), err)
 		return err
 	}
 
-	log.Printf("Calling Peer %s...\n", connAddr.String())
 	conn, err := net.DialTCP("tcp", nil, connAddr)
 	if err != nil {
-		log.Printf("Error dialing peer %s: %v\n", p.ip.String(), err)
 		return err
 	}
-	log.Printf("Connected to peer %s\n", connAddr.String())
 	p.conn = conn
 	p.encoder = gob.NewEncoder(conn)
 	p.decoder = gob.NewDecoder(conn)
@@ -51,7 +43,6 @@ func (p *Peer) call() error {
 }
 
 func (p *Peer) Close() {
-	log.Printf("Closing connection to %s\n", p.ip.String())
 	if p.conn != nil {
 		p.conn.Close()
 		p.conn = nil
@@ -60,27 +51,16 @@ func (p *Peer) Close() {
 
 func (p *Peer) Send(message Message) error {
 	defer func() {
-		recover() // a veces la falopa de message es nil pero no nos deja comparar con nil opasniosafnoiasfinoas
+		recover() // a veces message es nil pero por alguna razon no se puede comparar con nil el parametro, haciendo que algunas veces paniquee ante mensajes perfectamente validos
 	}()
 
-	log.Printf("Sending message to %s: %v\n", p.ip.String(), message)
 	if p.conn == nil {
-		err := p.call()
-		if err != nil {
-			log.Printf("Error calling peer %s: %v\n", p.ip.String(), err)
+		if err := p.call(); err != nil {
 			return err
 		}
 	}
 
-	err := p.encoder.Encode(message)
-	if err != nil && errors.Is(err, syscall.EPIPE) {
-		// log.Printf("Peer %s disconnected: %v\n", p.ip.String(), err)
-		p.Close()
-		return err
-	}
-
-	if err != nil {
-		log.Printf("Error sending message to %s: %v\n", p.ip.String(), err)
+	if err := p.encoder.Encode(message); err != nil {
 		p.Close()
 		return err
 	}
