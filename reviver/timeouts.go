@@ -1,4 +1,4 @@
-package shared
+package main
 
 import "time"
 
@@ -10,5 +10,5 @@ const (
 	ResurrecterPingTimeout = 250 * time.Millisecond
 	ResurrecterPingInterval = 1 * time.Second
 	ResurrecterRestartDelay = 5 * time.Second
-	ResurrecterPingRetries  = 5
+	ResurrecterPingRetries  = 4
 )

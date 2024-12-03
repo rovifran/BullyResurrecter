@@ -24,12 +24,9 @@ def main():
             if len(container) == 0 or container[0] not in CONTAINERS:
                 print("Invalid container")
                 continue
-            if len(container) == 1:
-                kill_container(CONTAINERS[container[0]])
-            else:
-                container_type = CONTAINERS[container[0]]
-                container_id = container[1]
-                kill_container(f"{container_type}-{container_id}")
+            container_name = [c for c in container]
+            container_name[0] = CONTAINERS[container_name[0]]
+            kill_container('-'.join(container_name))
     except KeyboardInterrupt:
         print("Exiting...")
 

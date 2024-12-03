@@ -4,8 +4,11 @@ package main // Representa a un PEER al que YO llamo y consulto, cuando el me co
 // en vez de A <--> B
 import (
 	"encoding/gob"
+	"errors"
 	"fmt"
+	"io"
 	"net"
+	"time"
 )
 
 type Peer struct {
@@ -66,4 +69,19 @@ func (p *Peer) Send(message Message) error {
 	}
 
 	return nil
+}
+
+func (p *Peer) RecvTimeout(timeout time.Duration) (Message, error) {
+	if p.conn == nil {
+		return Message{}, errors.New(io.EOF.Error())
+	}
+
+	p.conn.SetReadDeadline(time.Now().Add(timeout))
+	defer p.conn.SetReadDeadline(time.Time{})
+
+	var message Message
+	if err := p.decoder.Decode(&message); err != nil {
+		return Message{}, err
+	}
+	return message, nil
 }

@@ -9,6 +9,11 @@ import (
 
 type MessageType1 int
 
+type ResurrecterMessage struct {
+	Message     string
+	ProcessName string
+}
+
 const (
 	MessageTypePing MessageType1 = iota
 	MessageTypePong MessageType1 = 1

@@ -92,7 +92,7 @@ func (r *Resurrecter) RunMainLoop(process []string, responseChan chan struct{}) 
 		select {
 		case <-r.stopContext.Done():
 			return
-		case <-time.After(shared.ResurrecterPingInterval):
+		case <-time.After(ResurrecterPingInterval):
 			r.sendPing(process, responseChan)
 		}
 	}
@@ -117,7 +117,7 @@ func (r *Resurrecter) sendPing(process []string, responseChan chan struct{}) {
 	}
 
 	retries := 0
-	pingTimeout := shared.ResurrecterPingTimeout
+	pingTimeout := ResurrecterPingTimeout
 
 	for {
 		_, err := r.conn.WriteToUDP(buf.Bytes(), &net.UDPAddr{IP: net.ParseIP(process[1]), Port: 8080})
@@ -135,7 +135,7 @@ func (r *Resurrecter) sendPing(process []string, responseChan chan struct{}) {
 			retries++
 			pingTimeout *= 2
 
-			if retries >= shared.ResurrecterPingRetries {
+			if retries >= ResurrecterPingRetries {
 				log.Printf("Container %s is dead", process[0])
 				r.Resurrect(process[0])
 				return
@@ -156,5 +156,5 @@ func (r *Resurrecter) Resurrect(process string) {
 		log.Printf("Error restarting container: %v", err)
 	}
 
-	time.Sleep(shared.ResurrecterRestartDelay)
+	time.Sleep(ResurrecterRestartDelay)
 }
